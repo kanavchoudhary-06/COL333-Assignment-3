@@ -242,7 +242,7 @@ class SafeAgent(StarterAgent):
 # ----------------------------------------------------------------- settings
 GAMMA = 0.98
 UCB_C = 0.3
-MAX_DEPTH = 3
+MAX_DEPTH = 7
 TOP_K_ROOT, TOP_K = 10, 6
 SHOT_SAMPLES = 12
 H_B, H_D, H_R = -0.5, -0.10, 0.20

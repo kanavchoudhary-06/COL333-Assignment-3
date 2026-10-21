@@ -59,3 +59,4 @@ python eval\tournament.py tournament main helios full --aws --dry
 * Agent names: `main mdp helios gliders cyrus mcts bayes full baseline idle`, or any `path/to/agent.py[:Class]`.
 * Output: a standings table (3/1/0 points, then goal difference, then goals scored), a head-to-head grid, and `eval/out/<mode>_<time>.json` + `.csv`. Columns also show cut-offs, forfeits and the worst CPU use per agent.
 * Once keys are in the file, don't commit it.
+* Matches run through `eval/a3_patient.py`: `a3.py` unchanged, except a slow kick-off isn't mistaken for a finished match. Under parallel load the server's 600 pre-kick-off cycles can take over 30 s, and `a3.py` then ended matches early with `NO_SHOW_DATA (match never kicked off)`. Defaults: CPU cores / 2 matches at once, starts 15 s apart, one automatic retry of a match that never kicked off. `--half 15` gives short matches for quick checks.

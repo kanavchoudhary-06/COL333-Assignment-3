@@ -44,6 +44,7 @@ import random
 import re
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -118,14 +119,18 @@ def timing(stamp, team):
     return round(spent / 1000.0, 1), cuts, forf
 
 
-def play(fx, port, timeout=900):
+def play(fx, port, half=0, timeout=1200):
     ln, rn = team_name(fx["left"], fx["right"]), team_name(fx["right"], fx["left"])
     if ln == rn:
         ln, rn = ln[:9] + "1", rn[:9] + "2"
     stamp = time.strftime("%Y%m%d-%H%M%S") + f"_t{fx['id']:04d}"
-    cmd = [sys.executable, os.path.join(ROOT, "a3.py"), "match", ln, rn,
+    # a3_patient.py = a3.py unchanged, but a slow kick-off under parallel
+    # load is not mistaken for a finished match (see that file)
+    cmd = [sys.executable, os.path.join(HERE, "a3_patient.py"), "match", ln, rn,
            "--left", spec_of(fx["left"]), "--right", spec_of(fx["right"]),
            "-p", str(port), "--no-trace", "--stamp", stamp]
+    if half:
+        cmd += ["-t", str(half)]
     row = dict(fx)
     t0 = time.time()
     try:
@@ -155,21 +160,43 @@ def fake(fx):
                 r_cpu_s=0.0, r_cuts=0, r_forfeits=0, dry=True)
 
 
-def run_local(fxs, parallel, dry, out_path=None):
+STAGGER_S = 15.0   # gap between match starts: start-up is the CPU-heavy part
+
+
+def default_parallel():
+    """A match is ~24 processes and needs about one core while playing, more
+    while starting; more than cores/2 at once slows kick-off and can push
+    decisions toward the 1 s wall cap, which would distort results."""
+    return max(1, (os.cpu_count() or 2) // 2)
+
+
+def run_local(fxs, parallel, dry, out_path=None, half=0):
     if dry:
         return [fake(f) for f in fxs]
     if os.name == "nt":
         sys.exit("a3.py's server needs Linux or macOS: fill in the AWS keys at "
                  "the top of this file, or run it inside WSL.")
-    par = parallel or max(1, (os.cpu_count() or 2) - 1)
+    par = parallel or default_parallel()
     ports = queue.Queue()
     for k in range(par):
         ports.put(6000 + 10 * k)
+    gate = threading.Lock()
+    last = [0.0]
 
     def job(fx):
         port = ports.get()
         try:
-            return play(fx, port)
+            for attempt in range(2):            # one retry if it never started
+                with gate:                      # stagger the start-ups
+                    wait = last[0] + STAGGER_S - time.time()
+                    if wait > 0:
+                        time.sleep(wait)
+                    last[0] = time.time()
+                row = play(fx, port, half)
+                if row["valid"] or "NO_SHOW_DATA" not in row["problem"]:
+                    break
+            row["attempts"] = attempt + 1
+            return row
         finally:
             ports.put(port)
 
@@ -295,12 +322,13 @@ def run_aws(fxs, a):
     shards = max(1, min(a.shards, len(fxs)))
     save_json(os.path.join(OUT, "fixtures.json"), {"fixtures": fxs})
     per_vm = -(-len(fxs) // shards)
-    est_h = round(max(0.2, 0.15 + per_vm * 100.0 / 3.0 / 3600.0), 2)
+    est_h = round(max(0.2, 0.15 + per_vm * 100.0 / 2.0 / 3600.0), 2)  # 2 at a time on 4 vCPU
     jobs = []
     for i in range(shards):
         out = f"eval/out/tour_shard{i}.json"
         worker = (f"eval/tournament.py worker --fixtures eval/out/fixtures.json "
-                  f"--shard {i} --shards {shards} --out {out}")
+                  f"--shard {i} --shards {shards} --out {out}"
+                  + (f" --half {a.half}" if a.half else ""))
         jobs.append({
             "name": f"tour{i}",
             "est_hours": est_h,
@@ -373,7 +401,10 @@ def main():
     ap.add_argument("--local", action="store_true")
     ap.add_argument("--aws", action="store_true")
     ap.add_argument("--dry", action="store_true")
-    ap.add_argument("--parallel", type=int, default=0)
+    ap.add_argument("--parallel", type=int, default=0,
+                    help="matches at once (default: CPU cores / 2)")
+    ap.add_argument("--half", type=int, default=0,
+                    help="half length in seconds for quick tests (default: base.conf)")
     ap.add_argument("--shards", type=int, default=AWS_SHARDS)
     ap.add_argument("--instance", default=AWS_INSTANCE)
     ap.add_argument("--region", default=AWS_REGION)
@@ -389,7 +420,7 @@ def main():
         fxs = json.load(open(os.path.join(ROOT, a.fixtures)))["fixtures"]
         mine = [f for f in fxs if f["id"] % a.shards == a.shard]
         out = os.path.join(ROOT, a.out)
-        rows = run_local(mine, a.parallel, a.dry, out)
+        rows = run_local(mine, a.parallel, a.dry, out, a.half)
         save_json(out, {"rows": rows})
         return
 
@@ -403,7 +434,8 @@ def main():
             ap.error(f"unknown agent {n!r}: use {', '.join(AGENTS)} or a path")
     fxs = fixtures(a.mode, a.agents, a.games)
     use_aws = a.aws or (not a.local and aws_keys() is not None)
-    rows = run_aws(fxs, a) if use_aws else run_local(fxs, a.parallel, a.dry)
+    rows = (run_aws(fxs, a) if use_aws
+            else run_local(fxs, a.parallel, a.dry, None, a.half))
     report(rows, a.mode)
 
 

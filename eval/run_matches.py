@@ -74,7 +74,7 @@ def play(m, agent_spec, port, half, timeout):
     lspec, rspec = ((agent_spec, opp_spec) if m["mine_left"]
                     else (opp_spec, agent_spec))
     stamp = time.strftime("%Y%m%d-%H%M%S") + f"_eval{m['index']:03d}"
-    cmd = [sys.executable, A3, "match", left, right,
+    cmd = [sys.executable, os.path.join(ROOT, "eval", "a3_patient.py"), "match", left, right,
            "--left", lspec, "--right", rspec,
            "-p", str(port), "--no-trace", "--stamp", stamp]
     # rcssserver 19 has no server seed option; noise (kick_rand) differs per run
@@ -180,7 +180,7 @@ def main():
     ap.add_argument("--shard", type=int, default=0)
     ap.add_argument("--shards", type=int, default=1)
     ap.add_argument("--parallel", type=int, default=0,
-                    help="matches at once (0 = cpu_count - 1)")
+                    help="matches at once (0 = cpu_count / 2)")
     ap.add_argument("--seed-base", type=int, default=1)
     ap.add_argument("--half", type=int, default=0,
                     help="override half length (0 = base.conf)")
@@ -193,7 +193,7 @@ def main():
     opps = [o.strip() for o in a.opponents.split(",") if o.strip()]
     todo = [m for m in schedule(a.matches, opps, a.seed_base)
             if m["index"] % a.shards == a.shard]
-    par = a.parallel or max(1, (os.cpu_count() or 2) - 1)
+    par = a.parallel or max(1, (os.cpu_count() or 2) // 2)
     print(f"shard {a.shard}/{a.shards}: {len(todo)} matches, {par} at a time")
 
     rows = []
