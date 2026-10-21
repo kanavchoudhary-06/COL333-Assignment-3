@@ -13,7 +13,7 @@ shell, or keep them in %USERPROFILE%\.aws\credentials. This script never
 writes or prints them.
 #>
 param(
-    [string]$CdeployHome = $env:CDEPLOY_HOME,
+    [string]$CdeployHome = $(if ($env:CDEPLOY_HOME) { $env:CDEPLOY_HOME } else { "C:\Users\kanav\Downloads\Resume Builder\Cloud_deployer" }),
     [switch]$Real,
     [int]$Matches = 6,
     [int]$Shards = 2,

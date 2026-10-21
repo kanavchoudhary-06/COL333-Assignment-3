@@ -86,6 +86,7 @@ def main():
             "run": run,
             "env": {"PYTHONUNBUFFERED": "1"},
             "outputs": [out, out.replace(".json", ".csv")],
+            "needs_data": False,
         })
 
     spec = {

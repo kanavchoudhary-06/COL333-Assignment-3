@@ -20,6 +20,7 @@ for x in "$@"; do
   if [ "$x" = "--real" ]; then MODE=real; else ARGS+=("$x"); fi
 done
 
+CDEPLOY_HOME="${CDEPLOY_HOME:-/mnt/c/Users/kanav/Downloads/Resume Builder/Cloud_deployer}"
 if [ -n "${CDEPLOY_HOME:-}" ]; then
   [ -d "$CDEPLOY_HOME/cdeploy" ] || { echo "no cdeploy package in $CDEPLOY_HOME"; exit 1; }
   export PYTHONPATH="$CDEPLOY_HOME${PYTHONPATH:+:$PYTHONPATH}"
