@@ -250,7 +250,7 @@ VOR_W = 1.5               # weight of the Voronoi term
 OPP_COUNT = 2             # Voronoi term used when >= this many opps within 10 m
 RISK = {"def": 0.0, "mid": 0.5, "att": 1.5}   # v1.6 risk level (cycles)
 PRESS = {"def": 5, "mid": 3, "att": 4}        # v1.2 pressing level (cycles)
-SA_ITERS, SA_T0, SA_T1 = 250, 1.0, 0.01
+SA_ITERS, SA_T0, SA_T1 = 1000, 1.0, 0.01
 SPACING, MAX_FROM_HOME, HARD = 8.0, 18.0, 50.0
 REPLAN = 4                # cycles between positioning plans
 
