@@ -16,6 +16,8 @@ gibbs/replays/
 gibbs/index.html
 gibbs/play.html
 
+AWS keys.txt
+
 src/student/*.py
 !src/student/agent.py
 !src/student/interface.py
