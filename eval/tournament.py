@@ -167,7 +167,7 @@ def default_parallel():
     """A match is ~24 processes and needs about one core while playing, more
     while starting; more than cores/2 at once slows kick-off and can push
     decisions toward the 1 s wall cap, which would distort results."""
-    return max(1, (os.cpu_count() or 2) // 2)
+    return max(1, (os.cpu_count()-1))
 
 
 def run_local(fxs, parallel, dry, out_path=None, half=0):
