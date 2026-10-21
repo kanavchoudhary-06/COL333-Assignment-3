@@ -41,3 +41,21 @@ Notes
 * One match takes about 80–100 s of wall time. Each VM runs (vCPUs − 1) matches at once.
 * rcssserver 19 has no seed option, so repeats differ only through kick noise. The `seed` column is just a label.
 * A match is marked invalid if any player process printed a traceback (the same rule a3.py uses).
+
+## Tournaments and repeated matches between chosen agents (`tournament.py`)
+
+```powershell
+# round-robin: every pair plays --games games, sides alternate
+python eval\tournament.py tournament main helios cyrus mcts full --games 2
+
+# repeated matches between two agents
+python eval\tournament.py matches main full --games 10
+
+# free check of the whole pipeline first (fake scores, cdeploy simulator)
+python eval\tournament.py tournament main helios full --aws --dry
+```
+
+* To run on AWS, fill in `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `CDEPLOY_HOME` at the top of `eval/tournament.py`, or set them as environment variables. With keys present it deploys automatically. Without keys it runs locally, which needs Linux/macOS or WSL. Use `--local` / `--aws` to force one.
+* Agent names: `main mdp helios gliders cyrus mcts bayes full baseline idle`, or any `path/to/agent.py[:Class]`.
+* Output: a standings table (3/1/0 points, then goal difference, then goals scored), a head-to-head grid, and `eval/out/<mode>_<time>.json` + `.csv`. Columns also show cut-offs, forfeits and the worst CPU use per agent.
+* Once keys are in the file, don't commit it.
