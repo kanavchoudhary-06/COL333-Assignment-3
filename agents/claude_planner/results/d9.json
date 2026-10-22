@@ -1,0 +1,50 @@
+[
+ {
+  "i": 0,
+  "stamp": "d9_000_123433",
+  "ok": true,
+  "tag": "valid",
+  "us": 0,
+  "them": 1,
+  "plan": {
+   "NEW": 68,
+   "OLD": 2
+  }
+ },
+ {
+  "i": 1,
+  "stamp": "d9_001_123453",
+  "ok": true,
+  "tag": "valid",
+  "us": 0,
+  "them": 0,
+  "plan": {
+   "NEW": 73,
+   "OLD": 2
+  }
+ },
+ {
+  "i": 2,
+  "stamp": "d9_002_123827",
+  "ok": true,
+  "tag": "valid",
+  "us": 1,
+  "them": 1,
+  "plan": {
+   "NEW": 77,
+   "OLD": 2
+  }
+ },
+ {
+  "i": 3,
+  "stamp": "d9_003_123847",
+  "ok": true,
+  "tag": "valid",
+  "us": 1,
+  "them": 2,
+  "plan": {
+   "NEW": 65,
+   "OLD": 2
+  }
+ }
+]

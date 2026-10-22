@@ -1,0 +1,44 @@
+[
+ {
+  "left": "L06",
+  "right": "/tmp/claude-0/-home-user-repo/c77b4e0c-d6d5-5a24-acb5-7e8dfab7cd5e/scratchpad/tools/snapshots/t3/agent.py:VTired",
+  "gl": 1,
+  "gr": 1,
+  "flag": "valid"
+ },
+ {
+  "left": "L06",
+  "right": "/tmp/claude-0/-home-user-repo/c77b4e0c-d6d5-5a24-acb5-7e8dfab7cd5e/scratchpad/tools/snapshots/t3/agent.py:VTired",
+  "gl": 0,
+  "gr": 1,
+  "flag": "valid"
+ },
+ {
+  "left": "L075",
+  "right": "/tmp/claude-0/-home-user-repo/c77b4e0c-d6d5-5a24-acb5-7e8dfab7cd5e/scratchpad/tools/snapshots/t3/agent.py:VTired",
+  "gl": 0,
+  "gr": 1,
+  "flag": "valid"
+ },
+ {
+  "left": "L075",
+  "right": "/tmp/claude-0/-home-user-repo/c77b4e0c-d6d5-5a24-acb5-7e8dfab7cd5e/scratchpad/tools/snapshots/t3/agent.py:VTired",
+  "gl": 1,
+  "gr": 1,
+  "flag": "valid"
+ },
+ {
+  "left": "L06",
+  "right": "full",
+  "gl": 0,
+  "gr": 4,
+  "flag": "valid"
+ },
+ {
+  "left": "L075",
+  "right": "full",
+  "gl": 1,
+  "gr": 4,
+  "flag": "valid"
+ }
+]

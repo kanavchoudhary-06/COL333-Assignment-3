@@ -1,0 +1,198 @@
+[
+ {
+  "left": "VBase",
+  "right": "Starter",
+  "gl": 3,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VBase",
+  "right": "Starter",
+  "gl": 7,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobs",
+  "right": "Starter",
+  "gl": 5,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobs",
+  "right": "Starter",
+  "gl": 2,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VTired",
+  "right": "Starter",
+  "gl": 6,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VTired",
+  "right": "Starter",
+  "gl": 5,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VPhiV2",
+  "right": "Starter",
+  "gl": 6,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VPhiV2",
+  "right": "Starter",
+  "gl": 4,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VNoFollow",
+  "right": "Starter",
+  "gl": 5,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VNoFollow",
+  "right": "Starter",
+  "gl": 6,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VNoRefine",
+  "right": "Starter",
+  "gl": 5,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VNoRefine",
+  "right": "Starter",
+  "gl": 5,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobsT",
+  "right": "Starter",
+  "gl": 4,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobsT",
+  "right": "Starter",
+  "gl": 3,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VBase",
+  "right": "full",
+  "gl": 0,
+  "gr": 4,
+  "flag": "valid"
+ },
+ {
+  "left": "VBase",
+  "right": "full",
+  "gl": 0,
+  "gr": 4,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobs",
+  "right": "full",
+  "gl": 0,
+  "gr": 1,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobs",
+  "right": "full",
+  "gl": 0,
+  "gr": 4,
+  "flag": "valid"
+ },
+ {
+  "left": "VTired",
+  "right": "full",
+  "gl": 2,
+  "gr": 2,
+  "flag": "valid"
+ },
+ {
+  "left": "VTired",
+  "right": "full",
+  "gl": 0,
+  "gr": 4,
+  "flag": "valid"
+ },
+ {
+  "left": "VPhiV2",
+  "right": "full",
+  "gl": 2,
+  "gr": 3,
+  "flag": "valid"
+ },
+ {
+  "left": "VPhiV2",
+  "right": "full",
+  "gl": 1,
+  "gr": 4,
+  "flag": "valid"
+ },
+ {
+  "left": "VNoFollow",
+  "right": "full",
+  "gl": 2,
+  "gr": 3,
+  "flag": "valid"
+ },
+ {
+  "left": "VNoFollow",
+  "right": "full",
+  "gl": 0,
+  "gr": 4,
+  "flag": "valid"
+ },
+ {
+  "left": "VNoRefine",
+  "right": "full",
+  "gl": 0,
+  "gr": 4,
+  "flag": "valid"
+ },
+ {
+  "left": "VNoRefine",
+  "right": "full",
+  "gl": 1,
+  "gr": 2,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobsT",
+  "right": "full",
+  "gl": 0,
+  "gr": 1,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobsT",
+  "right": "full",
+  "gl": 1,
+  "gr": 4,
+  "flag": "valid"
+ }
+]

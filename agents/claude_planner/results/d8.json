@@ -1,0 +1,50 @@
+[
+ {
+  "i": 0,
+  "stamp": "d8_000_121915",
+  "ok": true,
+  "tag": "valid",
+  "us": 1,
+  "them": 2,
+  "plan": {
+   "NEW": 74,
+   "OLD": 2
+  }
+ },
+ {
+  "i": 1,
+  "stamp": "d8_001_121935",
+  "ok": true,
+  "tag": "valid",
+  "us": 1,
+  "them": 1,
+  "plan": {
+   "NEW": 74,
+   "OLD": 2
+  }
+ },
+ {
+  "i": 2,
+  "stamp": "d8_002_122305",
+  "ok": true,
+  "tag": "valid",
+  "us": 1,
+  "them": 1,
+  "plan": {
+   "NEW": 76,
+   "OLD": 2
+  }
+ },
+ {
+  "i": 3,
+  "stamp": "d8_003_122330",
+  "ok": true,
+  "tag": "valid",
+  "us": 0,
+  "them": 2,
+  "plan": {
+   "NEW": 67,
+   "OLD": 1
+  }
+ }
+]

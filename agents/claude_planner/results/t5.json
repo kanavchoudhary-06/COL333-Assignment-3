@@ -1,0 +1,30 @@
+[
+ {
+  "left": "L06",
+  "right": "/tmp/claude-0/-home-user-repo/c77b4e0c-d6d5-5a24-acb5-7e8dfab7cd5e/scratchpad/tools/snapshots/t3/agent.py:VTired",
+  "gl": 2,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "L06",
+  "right": "/tmp/claude-0/-home-user-repo/c77b4e0c-d6d5-5a24-acb5-7e8dfab7cd5e/scratchpad/tools/snapshots/t3/agent.py:VTired",
+  "gl": 0,
+  "gr": 2,
+  "flag": "valid"
+ },
+ {
+  "left": "L075",
+  "right": "/tmp/claude-0/-home-user-repo/c77b4e0c-d6d5-5a24-acb5-7e8dfab7cd5e/scratchpad/tools/snapshots/t3/agent.py:VTired",
+  "gl": 0,
+  "gr": 2,
+  "flag": "valid"
+ },
+ {
+  "left": "L075",
+  "right": "/tmp/claude-0/-home-user-repo/c77b4e0c-d6d5-5a24-acb5-7e8dfab7cd5e/scratchpad/tools/snapshots/t3/agent.py:VTired",
+  "gl": 2,
+  "gr": 0,
+  "flag": "valid"
+ }
+]

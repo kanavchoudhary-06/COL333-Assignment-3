@@ -1,0 +1,44 @@
+[
+ {
+  "left": "HOn",
+  "right": "/tmp/claude-0/-home-user-repo/c77b4e0c-d6d5-5a24-acb5-7e8dfab7cd5e/scratchpad/tools/snapshots/t3/agent.py:VTired",
+  "gl": 0,
+  "gr": 1,
+  "flag": "valid"
+ },
+ {
+  "left": "HOn",
+  "right": "/tmp/claude-0/-home-user-repo/c77b4e0c-d6d5-5a24-acb5-7e8dfab7cd5e/scratchpad/tools/snapshots/t3/agent.py:VTired",
+  "gl": 1,
+  "gr": 2,
+  "flag": "valid"
+ },
+ {
+  "left": "HSup",
+  "right": "/tmp/claude-0/-home-user-repo/c77b4e0c-d6d5-5a24-acb5-7e8dfab7cd5e/scratchpad/tools/snapshots/t3/agent.py:VTired",
+  "gl": 0,
+  "gr": 1,
+  "flag": "valid"
+ },
+ {
+  "left": "HSup",
+  "right": "/tmp/claude-0/-home-user-repo/c77b4e0c-d6d5-5a24-acb5-7e8dfab7cd5e/scratchpad/tools/snapshots/t3/agent.py:VTired",
+  "gl": 1,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "HThr",
+  "right": "/tmp/claude-0/-home-user-repo/c77b4e0c-d6d5-5a24-acb5-7e8dfab7cd5e/scratchpad/tools/snapshots/t3/agent.py:VTired",
+  "gl": 2,
+  "gr": 1,
+  "flag": "valid"
+ },
+ {
+  "left": "HThr",
+  "right": "/tmp/claude-0/-home-user-repo/c77b4e0c-d6d5-5a24-acb5-7e8dfab7cd5e/scratchpad/tools/snapshots/t3/agent.py:VTired",
+  "gl": 0,
+  "gr": 1,
+  "flag": "valid"
+ }
+]

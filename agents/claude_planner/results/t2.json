@@ -1,0 +1,268 @@
+[
+ {
+  "left": "VTired",
+  "right": "VJobsT",
+  "gl": 1,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobsT",
+  "right": "VTired",
+  "gl": 1,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VTired",
+  "right": "VJobs",
+  "gl": 1,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobs",
+  "right": "VTired",
+  "gl": 1,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VTired",
+  "right": "VPhiV2",
+  "gl": 0,
+  "gr": 2,
+  "flag": "valid"
+ },
+ {
+  "left": "VPhiV2",
+  "right": "VTired",
+  "gl": 0,
+  "gr": 1,
+  "flag": "valid"
+ },
+ {
+  "left": "VTired",
+  "right": "VTiredPhi",
+  "gl": 1,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VTiredPhi",
+  "right": "VTired",
+  "gl": 1,
+  "gr": 1,
+  "flag": "valid"
+ },
+ {
+  "left": "VTired",
+  "right": "VJobsTPhi",
+  "gl": 0,
+  "gr": 1,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobsTPhi",
+  "right": "VTired",
+  "gl": 0,
+  "gr": 1,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobsT",
+  "right": "VJobs",
+  "gl": 1,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobs",
+  "right": "VJobsT",
+  "gl": 2,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobsT",
+  "right": "VPhiV2",
+  "gl": 0,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VPhiV2",
+  "right": "VJobsT",
+  "gl": 0,
+  "gr": 2,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobsT",
+  "right": "VTiredPhi",
+  "gl": 0,
+  "gr": 1,
+  "flag": "valid"
+ },
+ {
+  "left": "VTiredPhi",
+  "right": "VJobsT",
+  "gl": 1,
+  "gr": 1,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobsT",
+  "right": "VJobsTPhi",
+  "gl": 0,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobsTPhi",
+  "right": "VJobsT",
+  "gl": 0,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobs",
+  "right": "VPhiV2",
+  "gl": 0,
+  "gr": 1,
+  "flag": "valid"
+ },
+ {
+  "left": "VPhiV2",
+  "right": "VJobs",
+  "gl": 0,
+  "gr": 1,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobs",
+  "right": "VTiredPhi",
+  "gl": 0,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VTiredPhi",
+  "right": "VJobs",
+  "gl": 0,
+  "gr": 1,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobs",
+  "right": "VJobsTPhi",
+  "gl": 1,
+  "gr": 1,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobsTPhi",
+  "right": "VJobs",
+  "gl": 0,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VPhiV2",
+  "right": "VTiredPhi",
+  "gl": 0,
+  "gr": 2,
+  "flag": "valid"
+ },
+ {
+  "left": "VTiredPhi",
+  "right": "VPhiV2",
+  "gl": 1,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VPhiV2",
+  "right": "VJobsTPhi",
+  "gl": 0,
+  "gr": 2,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobsTPhi",
+  "right": "VPhiV2",
+  "gl": 0,
+  "gr": 2,
+  "flag": "valid"
+ },
+ {
+  "left": "VTiredPhi",
+  "right": "VJobsTPhi",
+  "gl": 2,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobsTPhi",
+  "right": "VTiredPhi",
+  "gl": 2,
+  "gr": 1,
+  "flag": "valid"
+ },
+ {
+  "left": "VTired",
+  "right": "full",
+  "gl": -1,
+  "gr": -1,
+  "flag": "FAILED"
+ },
+ {
+  "left": "VTired",
+  "right": "full",
+  "gl": -1,
+  "gr": -1,
+  "flag": "FAILED"
+ },
+ {
+  "left": "VJobsT",
+  "right": "full",
+  "gl": -1,
+  "gr": -1,
+  "flag": "FAILED"
+ },
+ {
+  "left": "VJobsT",
+  "right": "full",
+  "gl": -1,
+  "gr": -1,
+  "flag": "FAILED"
+ },
+ {
+  "left": "VTiredPhi",
+  "right": "full",
+  "gl": 0,
+  "gr": 2,
+  "flag": "valid"
+ },
+ {
+  "left": "VTiredPhi",
+  "right": "full",
+  "gl": 1,
+  "gr": 2,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobsTPhi",
+  "right": "full",
+  "gl": 0,
+  "gr": 1,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobsTPhi",
+  "right": "full",
+  "gl": 0,
+  "gr": 3,
+  "flag": "valid"
+ }
+]

@@ -1,0 +1,68 @@
+[
+ {
+  "i": 0,
+  "stamp": "v3_000_092634",
+  "ok": true,
+  "tag": "valid",
+  "us": 1,
+  "them": 3,
+  "plan": {
+   "ME": 2
+  }
+ },
+ {
+  "i": 1,
+  "stamp": "v3_001_092654",
+  "ok": true,
+  "tag": "valid",
+  "us": 1,
+  "them": 1,
+  "plan": {
+   "ME": 2
+  }
+ },
+ {
+  "i": 2,
+  "stamp": "v3_002_092714r",
+  "ok": true,
+  "tag": "valid",
+  "us": 0,
+  "them": 2,
+  "plan": {
+   "ME": 2
+  }
+ },
+ {
+  "i": 3,
+  "stamp": "v3_003_092809",
+  "ok": true,
+  "tag": "valid",
+  "us": 1,
+  "them": 1,
+  "plan": {
+   "ME": 2
+  }
+ },
+ {
+  "i": 4,
+  "stamp": "v3_004_092829r",
+  "ok": true,
+  "tag": "valid",
+  "us": 0,
+  "them": 3,
+  "plan": {
+   "ME": 2
+  }
+ },
+ {
+  "i": 5,
+  "stamp": "v3_005_092953",
+  "ok": true,
+  "tag": "valid",
+  "us": 1,
+  "them": 2,
+  "plan": {
+   "ME": 2
+  }
+ }
+]

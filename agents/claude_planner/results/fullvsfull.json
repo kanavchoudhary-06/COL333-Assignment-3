@@ -1,0 +1,20 @@
+[
+ {
+  "i": 0,
+  "stamp": "fullvsfull_000_090509",
+  "ok": true,
+  "tag": "valid",
+  "us": 2,
+  "them": 1,
+  "plan": {}
+ },
+ {
+  "i": 1,
+  "stamp": "fullvsfull_001_090511",
+  "ok": true,
+  "tag": "valid",
+  "us": 0,
+  "them": 3,
+  "plan": {}
+ }
+]

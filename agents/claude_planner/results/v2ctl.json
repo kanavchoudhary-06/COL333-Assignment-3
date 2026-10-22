@@ -1,0 +1,99 @@
+[
+ {
+  "i": 0,
+  "stamp": "v2ctl_000_100606",
+  "ok": true,
+  "tag": "valid",
+  "us": 0,
+  "them": 3,
+  "plan": {
+   "ME": 2
+  }
+ },
+ {
+  "i": 1,
+  "stamp": "v2ctl_001_100626",
+  "ok": true,
+  "tag": "valid",
+  "us": 1,
+  "them": 2,
+  "plan": {
+   "ME": 2
+  }
+ },
+ {
+  "i": 2,
+  "stamp": "v2ctl_002_100646r",
+  "ok": true,
+  "tag": "valid",
+  "us": 1,
+  "them": 2,
+  "plan": {
+   "ME": 2
+  }
+ },
+ {
+  "i": 3,
+  "stamp": "v2ctl_003_100741",
+  "ok": true,
+  "tag": "valid",
+  "us": 0,
+  "them": 2,
+  "plan": {
+   "ME": 2
+  }
+ },
+ {
+  "i": 4,
+  "stamp": "v2ctl_004_100800rrr",
+  "ok": false,
+  "tag": "INVALID: NO_SHOW_DATA (match never kicked off)",
+  "us": 0,
+  "them": 0,
+  "plan": {}
+ },
+ {
+  "i": 5,
+  "stamp": "v2ctl_005_100932",
+  "ok": true,
+  "tag": "valid",
+  "us": 2,
+  "them": 2,
+  "plan": {
+   "ME": 2
+  }
+ },
+ {
+  "i": 6,
+  "stamp": "v2ctl_006_100933",
+  "ok": true,
+  "tag": "valid",
+  "us": 2,
+  "them": 3,
+  "plan": {
+   "ME": 2
+  }
+ },
+ {
+  "i": 7,
+  "stamp": "v2ctl_007_101032",
+  "ok": true,
+  "tag": "valid",
+  "us": 1,
+  "them": 1,
+  "plan": {
+   "ME": 1
+  }
+ },
+ {
+  "i": 8,
+  "stamp": "v2ctl_008_101116",
+  "ok": true,
+  "tag": "valid",
+  "us": 0,
+  "them": 1,
+  "plan": {
+   "ME": 2
+  }
+ }
+]

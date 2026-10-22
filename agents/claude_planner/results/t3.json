@@ -1,0 +1,72 @@
+[
+ {
+  "left": "VTired",
+  "right": "VJobs",
+  "gl": 2,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VTired",
+  "right": "VJobs",
+  "gl": 1,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobs",
+  "right": "VTired",
+  "gl": 0,
+  "gr": 2,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobs",
+  "right": "VTired",
+  "gl": 1,
+  "gr": 0,
+  "flag": "valid"
+ },
+ {
+  "left": "VTired",
+  "right": "full",
+  "gl": 0,
+  "gr": 4,
+  "flag": "valid"
+ },
+ {
+  "left": "VTired",
+  "right": "full",
+  "gl": 0,
+  "gr": 4,
+  "flag": "valid"
+ },
+ {
+  "left": "VTired",
+  "right": "full",
+  "gl": 1,
+  "gr": 2,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobs",
+  "right": "full",
+  "gl": 0,
+  "gr": 3,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobs",
+  "right": "full",
+  "gl": 0,
+  "gr": 4,
+  "flag": "valid"
+ },
+ {
+  "left": "VJobs",
+  "right": "full",
+  "gl": 0,
+  "gr": 3,
+  "flag": "valid"
+ }
+]
