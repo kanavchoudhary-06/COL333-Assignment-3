@@ -71,15 +71,15 @@ PEN_HW = 20.16
 # --- margin (cycles) -> probability curves: p = sigmoid(K * (margin - M0))
 P_CAP = 0.97
 PASS_M0, PASS_K = 1.0, 1.2
-DRIB_M0, DRIB_K = 1.0, 1.2
+DRIB_M0, DRIB_K = 0.2, 1.5
 HOLD_M0, HOLD_K = 2.0, 1.0
 SHOT_M0, SHOT_K = 0.0, 1.3   # goalie arriving with the ball = 50/50
 
 # --- evaluation H(state) and Loss
-W_PROG = 10.0             # progress up the pitch (x): 5 m forward ~ +0.48
+W_PROG = 15.0             # progress up the pitch (x): 5 m forward ~ +0.48
 W_CENTER = 1.6            # ball in the middle strip, away from the touchlines
-W_CLOSE = 1.0             # closeness to their goal centre (captures angle)
-W_SHOTQ = 4.0             # geometric shooting chance from the point
+W_CLOSE = 1.4             # closeness to their goal centre (captures angle)
+W_SHOTQ = 6.0             # geometric shooting chance from the point
 W_CLEAR = 0.4             # clearance: how many cycles until an opponent arrives
 CLEAR_CAP = 8.0           # more space than this adds nothing
 SHOTQ_RANGE = 25.0
@@ -88,9 +88,9 @@ L_BASE = 0.35             # losing the ball always costs this much...
 L_K = 1.6                 # ...plus more the closer it is to OUR goal
 
 # --- shooting
-GOAL_VALUE = 30.0         # must stay well above H_MAX (best position value)
+GOAL_VALUE = 40.0         # must stay well above H_MAX (best position value)
 SHOT_MISS = -0.5          # missed shot ~ goal kick: we lose the ball, far from our goal
-SHOOT_NOW_P = 0.25        # shoot immediately above this goal probability
+SHOOT_NOW_P = 0.20        # shoot immediately above this goal probability
 SHOT_RANGE = 35.0
 ONE_STEP_SPEED = 2.4      # realistic speed of a single-touch kick
 SHOT_POST_MARGIN = 0.8    # aim this far inside the posts (kick noise)
@@ -109,7 +109,7 @@ DRIB_SPEED = 0.7
 DRIB_GAMMA = 1.0          # (no extra penalty: dribbles now get depth 2 too)
 OPEN_PRESSURE = 6         # "nobody close" = nearest opponent >= this many cycles
 PASS_COST = 0.2           # every pass has execution risk (first touch, turn)
-BACK_PASS_PEN = 0.5       # backward pass/dribble when NOT under pressure (no ping-pong)
+BACK_PASS_PEN = 1.0       # backward pass/dribble when NOT under pressure (no ping-pong)
 NO_OPTION_P = 0.6         # holder has no pass above this -> attackers push up
 AHEAD_SPRINT = 5.0        # sprint when the target is this far ahead of me
 
@@ -176,10 +176,11 @@ SPACING = 8.0
 COMPACT = 25.0            # attackers stay within this many metres behind ball
 PASS_MOVE_CYCLES = 12
 # --- attacking shape (v11): deep supporter / last defender + two wide forwards
-ANCHOR_BEHIND = 15.0      # anchor stays this far behind the ball (goal-side)
-ANCHOR_MAX_X = 10.0       # ... and never further up than this
-WING_Y = 18.0             # wide forwards on both flanks at |y| ~ this
+ANCHOR_BEHIND = 14.0      # anchor stays this far behind the ball (goal-side)
+ANCHOR_MAX_X = 12.0       # ... and never further up than this
+WING_Y = 15.0             # near wing: this far to the side of the middle (was 18)
 WING_AHEAD = 25.0         # wide forwards at most this far ahead of the ball
+MAX_SUPPORT_DIST = 20.0   # NO attacker further than this from the holder
 WING_PASS_MIN = 0.6       # ... and only as far as a pass still reaches them
 SHOW_R = 9.0              # holder has no option: nearest teammate "shows" for the
                           # ball at about this distance from him
@@ -1280,6 +1281,10 @@ class Agent1(StarterAgent):
             if math.hypot(near_m.x - snap.bx, near_m.y - snap.by) < 2.0:
                 mem["our_holder"] = (near_m.unum, snap.cycle)
 
+        # --- contested (one of ours AND one of theirs at the ball): defend.
+        if mate_kick and opp_kick:
+            mate_kick = False
+
         # --- A: a teammate has the ball -> attacking positions
         if mate_kick:
             mem["last_poss"] = "us"
@@ -1825,19 +1830,19 @@ class Agent1(StarterAgent):
 
         anchor = self._anchor_point(snap, hx, hy)
         side = 1.0 if hy >= 0 else -1.0
-        far = self._wing_spot(snap, hx, hy, -side)
         near = self._wing_spot(snap, hx, hy, side)
         # does the holder have anybody to pass to right now?
         best_opt = max((self._pass_score(snap, hx, hy, bb.x, bb.y) for bb in snap.team
                         if math.hypot(bb.x - hx, bb.y - hy) > 2.0), default=0.0)
         push = best_opt < NO_OPTION_P
+        # no far wing: anchor + a close SUPPORT next to the holder + the near
+        # wing. If the holder has no option at all, the support "shows" first
+        # (gets the job before the wing when fewer players are available).
+        support = ("show" if push else "support", self._show_spot(snap, hx, hy))
         if push:
-            # nobody is available: one player comes SHORT to a free spot close
-            # to the holder (forward-ish if possible) - he replaces the near wing
-            tasks = [("anchor", anchor), ("show", self._show_spot(snap, hx, hy)),
-                     ("wing_far", far)][:len(players)]
+            tasks = [("anchor", anchor), support, ("wing_near", near)][:len(players)]
         else:
-            tasks = [("anchor", anchor), ("wing_far", far), ("wing_near", near)][:len(players)]
+            tasks = [("anchor", anchor), ("wing_near", near), support][:len(players)]
 
         def d(bb, t):
             return math.hypot(bb.x + 3 * bb.vx - t[0], bb.y + 3 * bb.vy - t[1])
@@ -1848,9 +1853,10 @@ class Agent1(StarterAgent):
                 best_cost, best = cost, {p.unum: t for p, t in zip(perm, tasks)}
         role, (tx, ty) = best.get(me.unum, ("open", _xy(Tools.home_position(agent))))
 
-        if role == "show":
-            note(agent, "att_show")
-            self._go(agent, snap, tx, ty, urgent=True, thr=0.7)
+        if role in ("show", "support"):
+            tx, ty = self._clamp_near(hx, hy, tx, ty)
+            note(agent, "att_" + role)
+            self._go(agent, snap, tx, ty, urgent=(role == "show"), thr=0.7)
             return
 
         if role == "anchor":
@@ -1880,18 +1886,28 @@ class Agent1(StarterAgent):
                 role += "_" + checked
         if not beyond_ok:
             tx = min(tx, snap.offside - 0.7)
+        tx, ty = self._clamp_near(hx, hy, tx, ty)
         dist = math.hypot(tx - me.x, ty - me.y)
         urgent = (role == "pass_move" or "burst" in role or (push and dist > 6.0)
                   or beyond_ok)
         note(agent, "att_" + role + ("_push" if push else ""))
         self._go(agent, snap, tx, ty, urgent=urgent)
 
+    def _clamp_near(self, hx, hy, tx, ty):
+        """Nobody further than MAX_SUPPORT_DIST from the holder."""
+        dt = math.hypot(tx - hx, ty - hy)
+        if dt > MAX_SUPPORT_DIST:
+            k = MAX_SUPPORT_DIST / dt
+            return hx + (tx - hx) * k, hy + (ty - hy) * k
+        return tx, ty
+
     def _wing_spot(self, snap, hx, hy, side):
         """Wide forward: as far forward as a pass from the holder can still
         reach him (P >= WING_PASS_MIN), never past the offside line. Tries
         spots from far ahead back towards the ball on his flank; if nothing on
         the flank is reachable, comes inside (|y| ~ 10)."""
-        top = min(hx + WING_AHEAD, snap.offside - 1.0, snap.hl - 6.0)
+        top = min(hx + WING_AHEAD, snap.offside - 1.0, snap.hl - 6.0,
+                  hx + MAX_SUPPORT_DIST - 2.0)
         best, bp = -1.0, None
         for wy in (side * WING_Y, side * (WING_Y - 8.0)):
             if abs(wy) > snap.hw - 3.0:
