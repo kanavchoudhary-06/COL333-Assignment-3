@@ -31,14 +31,55 @@ from pyrusgeom.geom_2d import Vector2D
 from src.student.interface import StarterAgent, Action, Tools, note
 
 
-T_MAX = 40              # rollout horizon in cycles
-NEVER = 10000
-GOAL_VALUE = 200.0      # value of a goal on the evaluation scale
-# The goalie as seen by a shot: fitted to the observed conversion of shots
-# in our own match logs (it reacts late and covers less than a field
-# player's model would suggest).
-GOALIE_REACT = 2.0
-GOALIE_CTRL = 1.2
+# ---------------------------------------------------------------- parameters
+# Every number here is a starting value to be tuned offline (plan, Section 8).
+class P:
+    GAMMA = 0.98            # per-cycle discount
+    D_MAX = 2               # search depth (macro actions per chain)
+    N_MAX = 60              # max node expansions per decision
+    CAP = 12                # children kept per expanded node (depth >= 2)
+    CHECK_EVERY = 4         # clock check every n expansions
+
+    # time manager (ms)
+    RESERVE_MS = 7500.0     # 10% of 75 s kept back
+    K_ONBALL = 4.0          # on-ball decisions may spend k x the fair share
+    K_OFFBALL = 0.3
+    B_MIN_MS = 2.0
+    B_MAX_MS = 250.0        # far below the 1000 ms wall cap
+    WALL_SAFETY_MS = 300.0  # stop if less than this is left of the 1 s cap
+    MATCH_CYCLES = 1500
+
+    # success models: P = sigmoid(K * (margin - C)), margin in cycles
+    PASS_K, PASS_C = 1.0, 0.5
+    DRIB_K, DRIB_C = 1.0, 1.0
+    SHOT_K, SHOT_C = 1.2, 1.0
+    HOLD_K, HOLD_C = 1.0, 1.5
+    HOLD_DISCOUNT = 0.65    # holding wins nothing: opportunity cost
+    OPP_REACT = 1.0         # cycles added to the relaxed opponent bound (turn)
+
+    # heuristic H(s) = sigmoid(H_B + H_D * dist_goal + H_R * min(free, 6))
+    H_B, H_D, H_R = -0.5, -0.10, 0.20
+    # failure value V_fail = -ALPHA * sigmoid(F_B + F_D * dist_own_goal)
+    ALPHA, F_B, F_D = 1.0, 0.1, -0.10
+    V_FAIL_SHOT = -0.015
+    CLEAR_VALUE = -0.022
+
+    # macro action geometry
+    PASS_MIN, PASS_MAX = 3.0, 40.0
+    PASS_END_SPEEDS = (1.5, 0.9)      # ball speed on arrival (fast, soft)
+    LEAD_DIST = (4.0, 7.0)
+    DRIB_DIRS = 8
+    DRIB_DISTS = (4.0, 8.0)
+    DRIB_SPEED = 0.65                 # m / cycle with the ball
+    SHOT_POINTS = 5
+    SHOT_RANGE = 32.0
+    COMMIT_DELTA = 0.05               # keep last kick unless beaten by this
+
+    # YuShan2022-style positioning ranker, one weight row per mode:
+    # (dist from slot, x, free space | cover distance, pass lane)
+    GRID_W = {"aggressive":   (-0.25, 0.08, 1.0, 1.2),
+              "conservative": (-0.35, 0.02, 0.8, 1.5),
+              "defend":       (-0.30, -0.02, -0.6, 0.0)}
 
 
 def _xy(v):
