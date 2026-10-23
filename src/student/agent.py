@@ -56,15 +56,15 @@ class P:
     DRIB_K, DRIB_C = 1.0, 1.0
     SHOT_K, SHOT_C = 1.2, 1.0
     HOLD_K, HOLD_C = 1.0, 1.5
-    HOLD_DISCOUNT = 0.85    # holding wins nothing: opportunity cost
+    HOLD_DISCOUNT = 0.65    # holding wins nothing: opportunity cost
     OPP_REACT = 1.0         # cycles added to the relaxed opponent bound (turn)
 
     # heuristic H(s) = sigmoid(H_B + H_D * dist_goal + H_R * min(free, 6))
     H_B, H_D, H_R = -0.5, -0.10, 0.20
     # failure value V_fail = -ALPHA * sigmoid(F_B + F_D * dist_own_goal)
     ALPHA, F_B, F_D = 1.0, 0.1, -0.10
-    V_FAIL_SHOT = -0.02
-    CLEAR_VALUE = -0.03
+    V_FAIL_SHOT = -0.015
+    CLEAR_VALUE = -0.022
 
     # macro action geometry
     PASS_MIN, PASS_MAX = 3.0, 40.0

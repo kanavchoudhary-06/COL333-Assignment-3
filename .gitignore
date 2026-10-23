@@ -18,7 +18,7 @@ gibbs/play.html
 
 AWS keys.txt
 eval/out/*
-
+.cdeploy/*
 src/student/*.py
 !src/student/agent.py
 !src/student/interface.py
