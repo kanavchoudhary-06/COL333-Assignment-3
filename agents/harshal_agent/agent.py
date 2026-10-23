@@ -71,14 +71,12 @@ PEN_HW = 20.16
 # --- margin (cycles) -> probability curves: p = sigmoid(K * (margin - M0))
 P_CAP = 0.97
 PASS_M0, PASS_K = 1.0, 1.2
-DRIB_M0, DRIB_K = 0.2, 1.5
 DRIB_M0, DRIB_K = 0.0, 1.5
 HOLD_M0, HOLD_K = 2.0, 1.0
 SHOT_M0, SHOT_K = 0.0, 1.3   # goalie arriving with the ball = 50/50
 
 # --- evaluation H(state) and Loss
 W_PROG = 15.0             # progress up the pitch (x): 5 m forward ~ +0.48
-W_CENTER = 1.6            # ball in the middle strip, away from the touchlines
 W_CENTER = 1.2            # ball in the middle strip, away from the touchlines
 W_CLOSE = 1.4             # closeness to their goal centre (captures angle)
 W_SHOTQ = 6.0             # geometric shooting chance from the point
@@ -99,19 +97,16 @@ SHOT_POST_MARGIN = 0.8    # aim this far inside the posts (kick noise)
 
 # --- search
 GAMMA = 0.9               # discount on the depth-2 part (less reliable)
-HOLD_COST = 0.6           # holding gains nothing and lets defenders close in
 HOLD_COST = 0.3           # holding gains nothing and lets defenders close in
 HOLD_FRAC = 0.3           # ... and costs this SHARE of the position value too
                           # (v9 used 40 %: it held only ~6 % of the time and scored)
                           # (fixed cost, so it does not grow with W_PROG)
-GREEDY_P = 0.85           # greedy shortcut: forward pass this safe...
 GREEDY_P = 0.70           # greedy shortcut: forward pass this safe...
 GREEDY_GAP = 0.4          # ...and this much better than the runner-up
 CLEAR_VALUE = -0.9        # below this, clear (if under pressure / own third)
 THROUGH_R = 7.0
 ALLOW_THROUGH = True      # set False if through passes keep being offside
 PASS_MIN, PASS_MAX = 3.0, 35.0
-DRIB_SPEED = 0.7
 DRIB_SPEED = 0.8          # m/cycle while dribbling (log: ~1.0); 0.7 was far too slow
 DRIB_TACKLE_R = 1.2       # opponent must get this close to the ball on a dribble
 DRIB_FWD_W = 0.5          # EXTRA value per 10 m a dribble gains towards their goal
@@ -164,7 +159,6 @@ COMMIT_PASS = 3           # cycles to stick with a pass (multi-touch kick)
 COMMIT_DRIB = 8           # cycles to stick with a dribble
 
 # --- defending
-TACKLE_MIN = 0.45         # presser tackles at this win probability (a tackle
 TACKLE_MIN = 0.30         # presser tackles at this win probability (a tackle
                           # freezes the player 10 cycles, so not on a whim)
 MARKER_TACKLE_MIN = 0.3   # any other defender close enough tackles at this
@@ -199,7 +193,6 @@ ANCHOR_BEHIND = 14.0      # anchor stays this far behind the ball (goal-side)
 ANCHOR_MAX_X = 12.0       # ... and never further up than this
 WING_Y = 15.0             # near wing: this far to the side of the middle (was 18)
 WING_AHEAD = 25.0         # wide forwards at most this far ahead of the ball
-MAX_SUPPORT_DIST = 20.0   # NO attacker further than this from the holder
 MAX_SUPPORT_DIST = 30.0   # NO attacker further than this from the holder ...
 REACH_P = 0.30            # ... AND a pass from the holder must reach him there with
                           # at least this probability (else he comes closer)
@@ -225,9 +218,6 @@ PATH_D = 8.0              # 2nd defender: on the carrier's line to goal this far
 CARRIER_SPEED = 0.9       # m/cycle a dribbler covers (for recovery runs)
 # --- stamina (v11)
 SPRINT_MIN = 0.45         # sprint (100) only above this stamina fraction
-OPEN_W = 0.5              # get-open: weight of free space around the point
-GOALWARD_W = 0.6          # get-open: bonus for being ahead of the holder (per 20 m)
-ANGLE_SPREAD = 30.0       # get-open: teammates within this angle (seen from the
 OPEN_W = 1.0              # get-open: weight of free space around the point
 GOALWARD_W = 1.5          # get-open: bonus for being ahead of the holder (per 20 m)
 OPEN_REACH_P = 0.6        # get-open: a spot only counts if a pass reaches it with this P
@@ -730,7 +720,6 @@ class Agent1(StarterAgent):
                 return
 
         # ---- 2. small candidate set with deterministic depth-1 values -----
-        cands = self._candidates(snap, bx, by, me, snap.field_mates, snap.offside, opps, pressure)
         cands = self._candidates(snap, bx, by, me, snap.field_mates, snap.offside, opps, pressure,
                                  passer_unum)
         if best_shot is not None:
@@ -930,14 +919,12 @@ class Agent1(StarterAgent):
             for t in range(1, T + 1):
                 f = min(1.0, t / float(T))
                 x, y = bx + (tx - bx) * f, by + (ty - by) * f
-                m = reach(d, x, y, TACKLE_R) - t
                 m = reach(d, x, y, DRIB_TACKLE_R) - t
                 if m < margin:
                     margin = m
                 if t == T and m < end_m:
                     end_m = m
         p = _sig(margin, DRIB_M0, DRIB_K)
-        vs = DRIB_GAMMA * H(snap, tx, ty, end_m)
         # forward carries get an extra reward proportional to the ground won
         vs = DRIB_GAMMA * H(snap, tx, ty, end_m) + DRIB_FWD_W * max(0.0, tx - bx) / 10.0
         r = dict(c)
@@ -951,7 +938,6 @@ class Agent1(StarterAgent):
         # no shooting-position credit: the real shots were already scored
         # separately, holding does not create one
         h = H(snap, bx, by, pressure) - W_SHOTQ * shot_quality(snap, bx, by)
-        v = p * (h - HOLD_COST) + (1 - p) * Loss(snap, bx)
         v = p * (h * (1.0 - HOLD_FRAC) - HOLD_COST) + (1 - p) * Loss(snap, bx)
         return dict(kind="hold", sub="hold", tx=bx, ty=by, p=p, v=v, pressure=pressure)
 
@@ -1017,7 +1003,6 @@ class Agent1(StarterAgent):
                     out.append(dict(kind="dribble", sub=name, tx=tx, ty=ty, D=D, ang=a))
         return out
 
-    def _candidates(self, snap, hx, hy, holder, mates, offside, opps, pressure):
     def _pass_pen(self, r, hx, pressure, passer_unum):
         """Penalty for a pass that does not move play forward, when nobody is
         pressing: backward (BACK_PASS_PEN), too little gain (NOGAIN_PEN scaled)
@@ -1081,9 +1066,6 @@ class Agent1(StarterAgent):
                 r = self._eval_pass(snap, hx, hy, c, opps, -1e9)
                 if r is None:
                     continue
-                if pressure > 2 and r["tx"] < hx - 1.0:   # no ping-pong
-                    r["pen"] = BACK_PASS_PEN
-                    r["v"] -= BACK_PASS_PEN * r["p"]
                 pen = self._pass_pen(r, hx, pressure, passer_unum)
                 if pen > 0.0:
                     r["pen"] = pen
@@ -1128,7 +1110,6 @@ class Agent1(StarterAgent):
             if c is None:
                 continue
             r = self._eval_pass(snap, hx, hy, c, popps, -1e9)
-            if r is not None and (best is None or r["v"] > best["v"]):
             if r is None:
                 continue
             pen = self._pass_pen(r, hx, _pressure_of(popps, hx, hy),
@@ -1147,7 +1128,6 @@ class Agent1(StarterAgent):
             r = self._eval_dribble(snap, hx, hy, d, popps, holder_body=hb)
             if best is None or r["v"] > best["v"]:
                 best = r
-        here = H(snap, hx, hy, 4.0) - W_SHOTQ * shot_quality(snap, hx, hy) - HOLD_COST
         here = ((H(snap, hx, hy, 4.0) - W_SHOTQ * shot_quality(snap, hx, hy)) * (1.0 - HOLD_FRAC)
                 - HOLD_COST)
         if best is None or best["v"] <= here:
@@ -1257,7 +1237,6 @@ class Agent1(StarterAgent):
             if k == "hold":            # ok = keep probability here
                 h = H(snap, sx, sy, pressure) - W_SHOTQ * shot_quality(snap, sx, sy)
                 return (total - a.get("stall", 0.0)
-                        + disc * (ok * (h - HOLD_COST) + (1 - ok) * Loss(snap, sx)))
                         + disc * (ok * (h * (1.0 - HOLD_FRAC) - HOLD_COST)
                                   + (1 - ok) * Loss(snap, sx)))
             total -= disc * ((PASS_COST if k == "pass" else 0.0) + a.get("pen", 0.0))
@@ -1943,7 +1922,6 @@ class Agent1(StarterAgent):
             hx, hy = hx + BRK_LEAD * math.cos(ga), hy + BRK_LEAD * math.sin(ga)
         anchor = self._anchor_point(snap, hx, hy)
         side = 1.0 if hy >= 0 else -1.0
-        near = self._wing_spot(snap, hx, hy, side)
         ahead = BRK_AHEAD if brk else WING_AHEAD
         near = self._wing_spot(snap, hx, hy, side, ahead)
         # does the holder have anybody to pass to right now?
@@ -1953,14 +1931,11 @@ class Agent1(StarterAgent):
         # no far wing: anchor + a close SUPPORT next to the holder + the near
         # wing. If the holder has no option at all, the support "shows" first
         # (gets the job before the wing when fewer players are available).
-        support = ("show" if push else "support", self._show_spot(snap, hx, hy))
         if push:
-            tasks = [("anchor", anchor), support, ("wing_near", near)][:len(players)]
             # nobody available: one player comes SHORT first
             tasks = [("anchor", anchor), ("show", self._show_spot(snap, hx, hy)),
                      ("wing_near", near)][:len(players)]
         else:
-            tasks = [("anchor", anchor), ("wing_near", near), support][:len(players)]
             # options exist: create play AHEAD - near wing + a forward in the
             # central channel / other side of the holder, both as far forward
             # as a pass still reaches them
@@ -1976,10 +1951,6 @@ class Agent1(StarterAgent):
                 best_cost, best = cost, {p.unum: t for p, t in zip(perm, tasks)}
         role, (tx, ty) = best.get(me.unum, ("open", _xy(Tools.home_position(agent))))
 
-        if role in ("show", "support"):
-            tx, ty = self._clamp_near(hx, hy, tx, ty)
-            note(agent, "att_" + role)
-            self._go(agent, snap, tx, ty, urgent=(role == "show"), thr=0.7)
         if role == "show":
             tx, ty = self._clamp_near(snap, hx, hy, tx, ty)
             note(agent, "att_" + role + brk_tag)
@@ -1990,14 +1961,10 @@ class Agent1(StarterAgent):
             # small refinement: keep a clear lane for the back pass
             tx, ty = self._get_open(snap, hx, hy, tx, ty, [(hx, hy)], False, radius=(3.0,),
                                     allow_ahead=False)
-            note(agent, "att_anchor")
-            self._go(agent, snap, tx, ty, urgent=me.x > hx)   # behind the ball fast
             note(agent, "att_anchor" + brk_tag)
             self._go(agent, snap, tx, ty, urgent=me.x > hx or brk)
             return
 
-        # wings: pass-and-move first, then get open around the wing spot
-        if mem.get("pm_until", -1) > snap.cycle and role.startswith("wing"):
         # wings / forward: pass-and-move first, then get open around the spot
         if mem.get("pm_until", -1) > snap.cycle and role.startswith(("wing", "forward")):
             fx = me.x + 8.0
@@ -2006,7 +1973,6 @@ class Agent1(StarterAgent):
             fx = min(fx, snap.hl - 6.0)
             # only if there is real room ahead (vs a high line the run would
             # stop at the offside line right next to the ball = crowding)
-            if fx - me.x >= 4.0:
             # and a pass can still reach him there
             if (fx - me.x >= 4.0
                     and self._pass_score(snap, hx, hy, fx, me.y) >= OPEN_REACH_P):
@@ -2014,25 +1980,19 @@ class Agent1(StarterAgent):
                 role = "pass_move"
         avoid = [(hx, hy)] + [(bb.x, bb.y) for bb in snap.field_mates]
         tx, ty = self._get_open(snap, hx, hy, tx, ty, avoid, beyond_ok)
-        if role.startswith("wing"):
         if role.startswith(("wing", "forward")):
             tx, ty, checked = self._checking(snap, hx, hy, tx, ty, avoid, beyond_ok)
             if checked:
                 role += "_" + checked
         if not beyond_ok:
             tx = min(tx, snap.offside - 0.7)
-        tx, ty = self._clamp_near(hx, hy, tx, ty)
         tx, ty = self._clamp_near(snap, hx, hy, tx, ty)
         dist = math.hypot(tx - me.x, ty - me.y)
         urgent = (role == "pass_move" or "burst" in role or (push and dist > 6.0)
-                  or beyond_ok)
-        note(agent, "att_" + role + ("_push" if push else ""))
                   or beyond_ok or brk)
         note(agent, "att_" + role + ("_push" if push else "") + brk_tag)
         self._go(agent, snap, tx, ty, urgent=urgent)
 
-    def _clamp_near(self, hx, hy, tx, ty):
-        """Nobody further than MAX_SUPPORT_DIST from the holder."""
     def _better_forward_pass(self, snap, hx, hy, holder, opps, pressure, drib_v):
         """A teammate clearly better placed than carrying the ball: a very safe
         (p >= GREEDY_P) pass at least BRK_PASS_AHEAD further forward whose
@@ -2071,8 +2031,6 @@ class Agent1(StarterAgent):
         dt = math.hypot(tx - hx, ty - hy)
         if dt > MAX_SUPPORT_DIST:
             k = MAX_SUPPORT_DIST / dt
-            return hx + (tx - hx) * k, hy + (ty - hy) * k
-        return tx, ty
             tx, ty = hx + (tx - hx) * k, hy + (ty - hy) * k
             dt = MAX_SUPPORT_DIST
         if dt <= REACH_MIN_D:
@@ -2112,14 +2070,11 @@ class Agent1(StarterAgent):
                     break
         return bp if bp is not None else (min(top, hx + 8.0), hy - side * 10.0)
 
-    def _wing_spot(self, snap, hx, hy, side):
     def _wing_spot(self, snap, hx, hy, side, ahead=WING_AHEAD):
         """Wide forward: as far forward as a pass from the holder can still
         reach him (P >= WING_PASS_MIN), never past the offside line. Tries
         spots from far ahead back towards the ball on his flank; if nothing on
         the flank is reachable, comes inside (|y| ~ 10)."""
-        top = min(hx + WING_AHEAD, snap.offside - 1.0, snap.hl - 6.0,
-                  hx + MAX_SUPPORT_DIST - 2.0)
         top = min(hx + ahead, snap.offside - 1.0, snap.hl - 6.0)
         best, bp = -1.0, None
         for wy in (side * WING_Y, side * (WING_Y - 8.0)):
@@ -2211,7 +2166,6 @@ class Agent1(StarterAgent):
         space = min(self._space(snap, px, py), 10.0) / 10.0
         s = (PASS_W * p + OPEN_W * space
              + GOALWARD_W * max(0.0, px - hx) / 20.0
-             - ROLE_W * math.hypot(px - rx, py - ry) / 10.0)
              - ROLE_W * math.hypot(px - rx, py - ry) / 10.0 - unreach)
         pa = math.atan2(py - hy, px - hx)
         for b in snap.field_mates:
@@ -2304,3 +2258,5 @@ class Agent2(StarterAgent):
 
     def off_ball(self, agent) -> None:
         return None
+
+# STARTER CODE ENDS HERE #
