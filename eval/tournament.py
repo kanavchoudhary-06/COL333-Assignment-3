@@ -62,6 +62,9 @@ AGENTS = {
     "full": "full",                          # grading reference team
     "baseline": "src/student/agent.py:Baseline",
     "idle": "src/student/agent.py:Agent2",
+    "harshal": "agents/harshal_agent/agent.py",
+    "claude_heavy": "agents/claude_planner/agent.py",
+    "claude_light": "agents/claude_planner/versions/OLD_light_VTired.py",
 }
 RESULT = re.compile(r"result\s*:\s*(\S+)\s+(\d+)-(\d+)\s+(\S+)\s+\[(.*?)\]")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
