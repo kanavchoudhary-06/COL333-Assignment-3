@@ -149,7 +149,7 @@ def play(fx, port, half=0, timeout=1200):
     row = dict(fx)
     t0 = time.time()
     try:
-        p = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True,
+        p = subprocess.run(cmd, cwd=ROOT, capture_output=False, text=True,
                            timeout=timeout)
         text = ANSI.sub("", p.stdout + "\n" + p.stderr)
     except subprocess.TimeoutExpired:
