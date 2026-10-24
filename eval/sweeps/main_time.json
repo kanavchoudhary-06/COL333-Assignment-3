@@ -1,0 +1,12 @@
+{
+  "name": "main_time",
+  "base": "main",
+  "opponents": ["full"],
+  "games": 10,
+  "mode": "grid",
+  "params": {
+    "P.D_MAX": [2, 3],
+    "P.N_MAX": [60, 300],
+    "P.K_ONBALL": [4.0, 8.0]
+  }
+}

@@ -28,7 +28,8 @@ then goals scored. Output: eval/out/tournament_<time>.json and .csv.
 AWS_ACCESS_KEY_ID = ""
 AWS_SECRET_ACCESS_KEY = ""
 AWS_REGION = "us-east-1"
-CDEPLOY_HOME = ""            # folder that contains the cdeploy/ package
+CDEPLOY_HOME = ""            # folder that contains cdeploy/; empty = the known
+                             # locations below (WSL and Windows paths)
 AWS_INSTANCE = "c6i.xlarge"  # 4 vCPU; about 3 matches at a time
 AWS_SHARDS = 3               # number of VMs
 AWS_BUDGET_USD = 3.0
@@ -49,10 +50,21 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CDEPLOY_CANDIDATES = [
+    "/mnt/c/Users/kanav/Downloads/Resume Builder/Cloud_deployer",   # from WSL
+    r"C:\Users\kanav\Downloads\Resume Builder\Cloud_deployer",   # from Windows
+]
+# what a VM needs; binaries, logs, replays and git history are not shipped
+SHIP = ["a3.py", "base.conf", "check_requirements.py", "generate.sh", "idl",
+        "my-formations", "requirements.txt", "server.py", "start.py", "start.sh",
+        "src", "utils", "agents", "eval"]
+SHIP_SKIP = ("__pycache__", "*.pyc", "out", ".stage", "cdeploy_*.json",
+             "rcssserver", "proxy", "service_pb2*")
 HERE = os.path.join(ROOT, "eval")
 OUT = os.path.join(HERE, "out")
 AGENTS = {
     "main": "src/student/agent.py",
+    "main_v1": "agents/main_v1/agent.py",       # previous main, for A/B tests
     "mdp": "agents/mdp_qlearning/agent.py",
     "helios": "agents/helios_chain/agent.py",
     "gliders": "agents/gliders_fractals/agent.py",
@@ -137,7 +149,7 @@ def play(fx, port, half=0, timeout=1200):
     row = dict(fx)
     t0 = time.time()
     try:
-        p = subprocess.run(cmd, cwd=ROOT, capture_output=False, text=True,
+        p = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True,
                            timeout=timeout)
         text = ANSI.sub("", p.stdout + "\n" + p.stderr)
     except subprocess.TimeoutExpired:
@@ -301,6 +313,27 @@ def save_json(path, data):
 
 
 # --------------------------------------------------------------------- AWS
+def make_stage():
+    """A clean copy of just what the VMs need (cdeploy ships the whole workdir
+    and follows symlinks, which would copy broken AppImage launchers and
+    every replay in logs/)."""
+    import shutil
+    stage = os.path.join(HERE, ".stage")
+    shutil.rmtree(stage, ignore_errors=True)
+    os.makedirs(os.path.join(stage, "scripts"))
+    for name in SHIP:
+        src = os.path.join(ROOT, name)
+        if os.path.isdir(src):
+            shutil.copytree(src, os.path.join(stage, name),
+                            ignore=shutil.ignore_patterns(*SHIP_SKIP))
+        elif os.path.isfile(src):
+            shutil.copy2(src, stage)
+    for f in glob.glob(os.path.join(ROOT, "scripts", "*")):
+        if os.path.isfile(f):                  # download scripts, start, startAll
+            shutil.copy2(f, os.path.join(stage, "scripts"))
+    return stage
+
+
 def aws_keys():
     kid = AWS_ACCESS_KEY_ID or os.environ.get("AWS_ACCESS_KEY_ID", "")
     sec = AWS_SECRET_ACCESS_KEY or os.environ.get("AWS_SECRET_ACCESS_KEY", "")
@@ -312,6 +345,9 @@ def run_aws(fxs, a):
     if not keys and not a.dry:
         sys.exit("no AWS keys: fill them in at the top of eval/tournament.py")
     home = a.cdeploy_home or CDEPLOY_HOME or os.environ.get("CDEPLOY_HOME", "")
+    if not home:
+        home = next((c for c in CDEPLOY_CANDIDATES
+                     if os.path.isdir(os.path.join(c, "cdeploy"))), "")
     env = dict(os.environ)
     if home:
         env["PYTHONPATH"] = home + os.pathsep + env.get("PYTHONPATH", "")
@@ -321,9 +357,14 @@ def run_aws(fxs, a):
     if subprocess.run([sys.executable, "-c", "import cdeploy"], env=env,
                       capture_output=True).returncode != 0:
         sys.exit("cannot import cdeploy: set CDEPLOY_HOME at the top of this file")
+    if not a.dry and subprocess.run([sys.executable, "-c", "import sky"], env=env,
+                                    capture_output=True).returncode != 0:
+        sys.exit("SkyPilot is missing: pip install -e \"%s[skypilot]\" && sky check"
+                 % (home or "<Cloud_deployer>"))
+    stage = make_stage()
 
     shards = max(1, min(a.shards, len(fxs)))
-    save_json(os.path.join(OUT, "fixtures.json"), {"fixtures": fxs})
+    save_json(os.path.join(stage, "eval", "out", "fixtures.json"), {"fixtures": fxs})
     per_vm = -(-len(fxs) // shards)
     est_h = round(max(0.2, 0.15 + per_vm * 100.0 / 2.0 / 3600.0), 2)  # 2 at a time on 4 vCPU
     jobs = []
@@ -346,11 +387,12 @@ def run_aws(fxs, a):
                    else (".venv/bin/python " + worker),
             "env": {"PYTHONUNBUFFERED": "1"},
             "outputs": [out],
+            "needs_data": False,
         })
     spec = {
         "project": "col333-a3-tournament",
         "mode": "dry-run" if a.dry else "real",
-        "workdir": "..",
+        "workdir": os.path.relpath(stage, HERE),   # the clean copy, not the repo
         "budget": {"total_usd": a.budget, "max_hourly_usd": 2.0,
                    "alert_fraction": 0.8},
         "providers": {"aws": {"backend": "skypilot", "regions": [a.region],

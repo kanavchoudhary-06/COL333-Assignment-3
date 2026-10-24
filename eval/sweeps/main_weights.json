@@ -1,0 +1,18 @@
+{
+  "name": "main_weights",
+  "base": "main",
+  "opponents": ["full"],
+  "games": 10,
+  "mode": "random",
+  "samples": 12,
+  "seed": 1,
+  "params": {
+    "P.H_D": [-0.07, -0.10, -0.13],
+    "P.H_R": [0.10, 0.20, 0.30],
+    "P.PASS_C": [0.0, 0.5, 1.0],
+    "P.SHOT_C": [0.5, 1.0, 1.5],
+    "P.ALPHA": [0.5, 1.0, 2.0],
+    "P.OPP_REACT": [0.5, 1.0, 1.5],
+    "P.SHOT_RANGE": [25.0, 32.0]
+  }
+}
