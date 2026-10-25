@@ -1,6 +1,6 @@
 # Your agent goes here. The Agent1 class must hold your final submission.
 #
-# COL333 A3 - Agent1 (v24)
+# COL333 A3 - Agent1 (v25)
 #
 # Big picture (see COL333_A3_ideas.txt for the reasoning behind every choice):
 #
@@ -59,6 +59,7 @@ from src.student.interface import StarterAgent, Action, Tools, note
 #   (v22) passes still tackled in the wind-up  ONE_STEP_PRESS up (4)
 #   (v24) still too risky with the ball ...... KEEP_BALL up (1.5), RISKY_P up (0.7)
 #   (v24) now too timid / never goes forward . KEEP_BALL down (0.5), SAFE_P up (0.9)
+#   (v25) online learning misbehaves ......... LEARN = False (or LEARN_LR down)
 # After changing a number, delete __pycache__ if a quick re-run behaves the
 # same (python may reuse an old compiled copy of an edited file).
 
@@ -85,8 +86,8 @@ HOLD_M0, HOLD_K = 2.0, 1.0
 SHOT_M0, SHOT_K = 0.0, 1.3   # goalie arriving with the ball = 50/50
 
 # --- evaluation H(state) and Loss
-W_PROG = 12.0             # progress up the pitch (x): 5 m forward ~ +0.48
-W_CENTER = 2.0            # ball in the middle strip, away from the touchlines
+W_PROG = 15.0             # progress up the pitch (x): 5 m forward ~ +0.48
+W_CENTER = 1.2            # ball in the middle strip, away from the touchlines
 W_CLOSE = 1.4             # closeness to their goal centre (captures angle)
 W_SHOTQ = 6.0             # geometric shooting chance from the point
 W_CLEAR = 0.4             # clearance: how many cycles until an opponent arrives
@@ -265,7 +266,20 @@ RISKY_P = 0.6             # ... passes / dribbles below this are not even consid
 SELFPASS_MIN_P = 0.9      # self-pass (kick ahead + run) only when this safe
 MC_RISK_TIE = 0.5         # Monte Carlo may pick a riskier action than the safest
                           # good one only if it is worth this much more
-RUN_PASSES = ("lead", "through", "behind")   # passes the receiver must RUN onto:
+RUN_PASSES = ("lead", "through", "behind")
+# --- v25 ONLINE LEARNING during the match (ISIS-style: correct the model's
+# own parameters from its prediction errors against THIS opponent)
+LEARN = True              # set False to switch all online learning off
+LEARN_LR = 0.25           # step size (cycles of margin per unit of surprise)
+LEARN_ADJ_MIN, LEARN_ADJ_MAX = -0.5, 3.0   # learned margin offsets stay in here
+                          # (asymmetric on purpose: it may get a lot more careful,
+                          # only a little bolder - v24 asked for caution)
+LEARN_PASS_SPEED = 1.3    # ball leaving our feet faster than this = a pass
+LEARN_SPEED_Q = 0.95      # opponent speed = this quantile of observed running
+LEARN_SPEED_ETA = 0.01    # ... step size of that quantile estimate
+LEARN_SPEED_MIN, LEARN_SPEED_MAX = 0.95, 1.15
+LEARN_CARRIER_A = 0.03    # moving-average rate for their dribbling speed
+LEARN_NOTE_EVERY = 100    # write the learned values into the log this often   # passes the receiver must RUN onto:
                           # judged on the ball reaching the TARGET (not on the
                           # receiver touching it on the way) and on him getting there
 
@@ -685,6 +699,141 @@ class Agent1(StarterAgent):
         # NOT a dict (no [] or .get), but `self` persists for each player
         # (one process per player), so state is kept here instead.
         self.mem = {}
+        # v25 learned during the match (start = the hand-set model)
+        self.L = dict(pass_adj=0.0, drib_adj=0.0, opp_speed=OPP_SPEED,
+                      carrier=CARRIER_SPEED, n_pass=0, n_lost=0, n_drib=0, n_drib_lost=0)
+
+    def _pm0(self):
+        """Pass success curve offset: hand-set PASS_M0 + what was learned."""
+        return PASS_M0 + self.L["pass_adj"]
+
+    def _dm0(self):
+        return DRIB_M0 + self.L["drib_adj"]
+
+    # ------------------------------------------------------------ v25 learning
+    def _learn(self, agent, snap, i_have):
+        """Online learning, every cycle, from what this player observes.
+          1. PASSES (ours, by anyone): when the ball leaves one of our players'
+             feet fast, our model predicts its interception margin from the
+             real ball path; when somebody controls it we know the outcome.
+             The offset of the success curve moves by LEARN_LR * (p - y):
+             passes lost more often than predicted -> more careful, and the
+             other way round. Every player learns from ALL our passes, so the
+             four players end up with (almost) the same value and keep
+             predicting each other's choices (HFO: shared experience helps).
+          2. DRIBBLES (only the dribbler knows his prediction): same update.
+          3. OPPONENT SPEED: a high quantile of their observed running speed.
+          4. THEIR DRIBBLING SPEED: average ball speed while they carry it.
+        Then the opponents in this snapshot get the learned speed."""
+        if not LEARN:
+            return
+        L, mem = self.L, self.mem
+        wm = agent.wm
+        cyc = snap.cycle
+        mate_kick = bool(getattr(wm, "kickable_teammate_existance", False))
+        opp_kick = bool(getattr(wm, "kickable_opponent_existance", False))
+        ours = i_have or mate_kick
+        try:
+            # --- 3. opponent running speed (quantile estimate, SGD)
+            prev = mem.get("opp_prev", {})
+            cur = {}
+            for o in snap.opps:
+                cur[o.key] = (o.x, o.y, cyc)
+                q = prev.get(o.key)
+                if o.goalie or q is None or q[2] != cyc - 1:
+                    continue
+                d = math.hypot(o.x - q[0], o.y - q[1])
+                if 0.3 < d < 1.6:
+                    L["opp_speed"] += LEARN_SPEED_ETA * (LEARN_SPEED_Q - (1.0 if d < L["opp_speed"] else 0.0))
+                    L["opp_speed"] = min(LEARN_SPEED_MAX, max(LEARN_SPEED_MIN, L["opp_speed"]))
+            mem["opp_prev"] = cur
+            # --- 4. their dribbling speed (ball speed while they carry it)
+            pb = mem.get("ball_prev")
+            if pb is not None and pb[2] == cyc - 1 and opp_kick and pb[3]:
+                d = math.hypot(snap.bx - pb[0], snap.by - pb[1])
+                if d < 1.6:
+                    L["carrier"] += LEARN_CARRIER_A * (min(1.05, 1.15 * d) - L["carrier"])
+                    L["carrier"] = min(1.05, max(0.5, L["carrier"]))
+            mem["ball_prev"] = (snap.bx, snap.by, cyc, opp_kick)
+            # --- 1. passes: resolve a pending one
+            ev = mem.get("pass_ev")
+            if ev is not None and cyc > ev[0]:
+                y = None
+                if opp_kick and not ours:
+                    y = 0.0
+                elif ours and cyc - ev[0] >= 2:
+                    y = 1.0
+                elif cyc - ev[0] > 40:
+                    mem["pass_ev"] = None
+                if y is not None:
+                    p = _sig(ev[1], self._pm0(), PASS_K)
+                    L["pass_adj"] = min(LEARN_ADJ_MAX, max(LEARN_ADJ_MIN,
+                                        L["pass_adj"] + LEARN_LR * (p - y)))
+                    L["n_pass"] += 1
+                    L["n_lost"] += int(y == 0.0)
+                    mem["pass_ev"] = None
+            # --- 1. passes: detect a new one (ball just left our feet, fast)
+            sp = math.hypot(snap.bvx, snap.bvy)
+            if ours or opp_kick:
+                mem["feet"] = cyc if ours and not opp_kick else -99
+            elif (mem.get("pass_ev") is None and cyc - mem.get("feet", -99) <= 2
+                  and sp >= LEARN_PASS_SPEED and not self._is_shot(snap)):
+                # the prediction made BEFORE the kick (by the passer himself,
+                # or by me predicting him) if the ball went that way: that is
+                # the number our decisions are made with, so that is the one
+                # to calibrate
+                dec = mem.get("dec")
+                if dec is not None and cyc - dec[0] <= 4:
+                    da = abs(_norm180(math.degrees(math.atan2(snap.bvy, snap.bvx)
+                                                   - math.atan2(dec[2] - dec[5], dec[1] - dec[4]))))
+                    if da < 25.0:
+                        mem["pass_ev"] = (cyc, dec[3])
+                mem["feet"] = -99
+            # --- 2. my own dribble: resolve
+            dv = mem.get("drib_ev")
+            if dv is not None and cyc > dv[0]:
+                y = None
+                if opp_kick and not i_have:
+                    y = 0.0
+                elif cyc >= dv[0] + dv[2] + 1 and ours:
+                    y = 1.0
+                elif cyc > dv[0] + dv[2] + 8:
+                    mem["drib_ev"] = None
+                if y is not None:
+                    p = _sig(dv[1], self._dm0(), DRIB_K)
+                    L["drib_adj"] = min(LEARN_ADJ_MAX, max(LEARN_ADJ_MIN,
+                                        L["drib_adj"] + LEARN_LR * (p - y)))
+                    L["n_drib"] += 1
+                    L["n_drib_lost"] += int(y == 0.0)
+                    mem["drib_ev"] = None
+        except Exception as e:          # learning must never break a decision
+            note(agent, _err_label("learn", e))
+        for o in snap.opps:
+            if not o.goalie:
+                o.speed = L["opp_speed"]
+
+    def _learn_note(self, agent):
+        """Every LEARN_NOTE_EVERY cycles the learned values become this
+        player's label (visible in `a3.py why`): pass/drib offsets in tenths
+        of a cycle (+ = more careful), speeds in cm per cycle."""
+        try:
+            cyc = int(getattr(agent.wm, "cycle", 0) or 0)
+        except Exception:
+            return
+        if not LEARN or cyc % LEARN_NOTE_EVERY != 0:
+            return
+        L = self.L
+        note(agent, "learn_pass%+d_drib%+d_spd%d_car%d" % (
+            round(10 * L["pass_adj"]), round(10 * L["drib_adj"]),
+            round(100 * L["opp_speed"]), round(100 * L["carrier"])),
+             passes=L["n_pass"], lost=L["n_lost"], dribbles=L["n_drib"],
+             drib_lost=L["n_drib_lost"])
+
+    def _is_shot(self, snap):
+        if snap.bvx <= 0.5 or snap.bx < 15.0:
+            return False
+        t = (snap.hl - snap.bx) / snap.bvx
+        return abs(snap.by + snap.bvy * t) < snap.goal_hw + 2.0
 
     # ------------------------------------------------------------------ time
     def _budget(self, agent):
@@ -717,10 +866,12 @@ class Agent1(StarterAgent):
         except Exception as e:      # never crash a player: fall back
             note(agent, _err_label("on", e))
             StarterAgent.on_ball(self, agent)
+        self._learn_note(agent)
 
     def _on_ball(self, agent):
         t0 = time.perf_counter()
         snap = Snap(agent)
+        self._learn(agent, snap, True)
         self.mem["last_poss"] = "us"
         prev = self.mem.get("our_holder")
         if (prev is not None and prev[0] != snap.me.unum
@@ -886,6 +1037,8 @@ class Agent1(StarterAgent):
             Action.kick_one_step(agent, tgt)
         elif k == "pass":
             self.mem["pm_until"] = snap.cycle + PASS_MOVE_CYCLES
+            if "m" in c:
+                self.mem["dec"] = (snap.cycle, c["tx"], c["ty"], c["m"], snap.bx, snap.by)
             if not keep_plan:
                 self.mem["plan"] = dict(kind="pass", tx=c["tx"], ty=c["ty"], n=c["n"], v0=c["v0"],
                                         recv=c["recv"].unum, cycle=snap.cycle,
@@ -907,6 +1060,8 @@ class Agent1(StarterAgent):
             Action.dribble(agent, tgt)
         elif k == "dribble":
             if not keep_plan:
+                if "m" in c and self.mem.get("drib_ev") is None:
+                    self.mem["drib_ev"] = (snap.cycle, c["m"], int(c.get("tend", 5)))
                 self.mem["plan"] = dict(kind="dribble", tx=c["tx"], ty=c["ty"],
                                         cycle=snap.cycle, commit=COMMIT_DRIB)
             Action.dribble(agent, tgt)
@@ -979,7 +1134,7 @@ class Agent1(StarterAgent):
             if res is None:
                 return None
             margin, tend, ix, iy, endm, ex, ey = res
-            p = _sig(margin, PASS_M0, PASS_K)
+            p = _sig(margin, self._pm0(), PASS_K)
             vs = H(snap, ex, ey, endm)
             r = dict(c)
             r.update(p=p, vs=vs, v=p * (vs - PASS_COST) + (1 - p) * Loss(snap, ix), ix=ix,
@@ -989,7 +1144,7 @@ class Agent1(StarterAgent):
         state = {"cut": False}
 
         def cut(m):
-            p = _sig(m, PASS_M0, PASS_K)
+            p = _sig(m, self._pm0(), PASS_K)
             if p * vs_ub + (1 - p) * (-L_BASE) <= alpha:
                 state["cut"] = True
                 return True
@@ -1001,7 +1156,7 @@ class Agent1(StarterAgent):
         if res is None:
             return None
         margin, tend, ix, iy, endm, ex, ey = res
-        p = _sig(margin, PASS_M0, PASS_K)
+        p = _sig(margin, self._pm0(), PASS_K)
         vs = H(snap, ex, ey, endm)
         r = dict(c)
         r.update(p=p, vs=vs, v=p * (vs - PASS_COST) + (1 - p) * Loss(snap, ix), ix=ix, iy=iy,
@@ -1028,7 +1183,7 @@ class Agent1(StarterAgent):
                     margin = m
                 if t == T and m < end_m:
                     end_m = m
-        p = _sig(margin, DRIB_M0, DRIB_K)
+        p = _sig(margin, self._dm0(), DRIB_K)
         # forward carries get an extra reward proportional to the ground won
         vs = DRIB_GAMMA * H(snap, tx, ty, end_m) + DRIB_FWD_W * max(0.0, tx - bx) / 10.0
         r = dict(c)
@@ -1282,7 +1437,7 @@ class Agent1(StarterAgent):
         m = min(margin, endm - late)
         if rng is not None:
             return m, ex, ey, max(tend, t_me), endm - late, ix, iy
-        p = _sig(m, PASS_M0, PASS_K)
+        p = _sig(m, self._pm0(), PASS_K)
         vs = H(snap, ex, ey, endm - late) + DRIB_FWD_W * max(0.0, ex - hx) / 10.0
         return dict(kind="dribble", kick=True, tx=tx, ty=ty, v0=v0, n=max(tend, 2),
                     p=p, vs=vs, v=p * vs + (1 - p) * Loss(snap, ix), ix=ix, iy=iy,
@@ -1408,7 +1563,7 @@ class Agent1(StarterAgent):
             if res is None:
                 return False, tx, ty, a["tend"], 0
             m, ex, ey, t, endm, ix, iy = res
-            if m + rng.gauss(0.0, MC_SIGMA) > 0.0:
+            if m + rng.gauss(0.0, MC_SIGMA) > self.L["pass_adj"]:
                 return True, ex, ey, t, endm
             return False, ix, iy, t, 0
         if k == "dribble":
@@ -1417,7 +1572,7 @@ class Agent1(StarterAgent):
             if not snap.in_field(c["tx"], c["ty"], 0.5):
                 return False, sx, sy, 1, 0
             res = self._eval_dribble(snap, sx, sy, c, nopps, holder_body=holder)
-            ok = res["m"] + rng.gauss(0.0, MC_SIGMA) > MC_DRIB_OFF
+            ok = res["m"] + rng.gauss(0.0, MC_SIGMA) > MC_DRIB_OFF + self.L["drib_adj"]
             if ok:
                 return True, res["ex"], res["ey"], res["tend"], res["endm"]
             return False, res["ix"], res["iy"], res["tend"], 0
@@ -1445,7 +1600,7 @@ class Agent1(StarterAgent):
         if res is None:
             return False, ntx, nty, a["n"], 0
         margin, tend, ix, iy, endm, ex, ey = res
-        if margin + rng.gauss(0.0, MC_SIGMA) > 0.0:
+        if margin + rng.gauss(0.0, MC_SIGMA) > self.L["pass_adj"]:
             return True, ex, ey, tend, endm
         return False, ix, iy, tend, 0
 
@@ -1546,6 +1701,7 @@ class Agent1(StarterAgent):
         except Exception as e:
             note(agent, _err_label("off", e))
             StarterAgent.off_ball(self, agent)
+        self._learn_note(agent)
 
     def _off_ball(self, agent):
         t0 = time.perf_counter()
@@ -1557,6 +1713,7 @@ class Agent1(StarterAgent):
             note(agent, "quick_off_ball")
             StarterAgent.off_ball(self, agent)
             return
+        self._learn(agent, snap, False)
         allow = max(self._allowance(agent, snap, False), 1.0)
         self._deadline = t0 + allow / 1000.0
         me = snap.me
@@ -1622,6 +1779,10 @@ class Agent1(StarterAgent):
             pred = None
             if not holder.goalie and time.perf_counter() < self._deadline:
                 pred = self._predict_holder(snap, holder)
+            if pred is not None and pred["kind"] == "pass" and "m" in pred:
+                # v25: what we expect the holder to play, with its predicted
+                # margin -> checked against the outcome if he really plays it
+                mem["dec"] = (snap.cycle, pred["tx"], pred["ty"], pred["m"], snap.bx, snap.by)
             self._attack(agent, snap, snap.bx, snap.by, {holder.unum}, False, pred)
             return
 
@@ -2068,7 +2229,7 @@ class Agent1(StarterAgent):
             L = min(L, 30.0)
         # how fast is he actually going? (a shielding / standing carrier is
         # not running away; dribbling pushes the ball at about his speed)
-        v = min(CARRIER_SPEED, max(0.35, 1.2 * math.hypot(snap.bvx, snap.bvy)))
+        v = min(self.L["carrier"], max(0.35, 1.2 * math.hypot(snap.bvx, snap.bvy)))
         s = 2.0
         while s < L - 4.0:
             px, py = cx + ux * s, cy + uy * s
@@ -2136,7 +2297,7 @@ class Agent1(StarterAgent):
                         tmax=min(40, n + 6), mode="virtual")
         if res is None:
             return 0.0
-        return _sig(res[0], PASS_M0, PASS_K)
+        return _sig(res[0], self._pm0(), PASS_K)
 
     def _space(self, snap, x, y):
         return min((math.hypot(o.x - x, o.y - y) for o in snap.opps), default=30.0)
