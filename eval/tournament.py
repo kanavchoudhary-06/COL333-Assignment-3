@@ -136,12 +136,28 @@ def play(fx, port, half=0, timeout=1200):
         cmd += ["-t", str(half)]
     row = dict(fx)
     t0 = time.time()
+    # run the match, show its output LIVE (progress dots included) and keep a
+    # copy so the RESULT line can be parsed afterwards
+    p = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE,
+                         stderr=subprocess.STDOUT)
+    killer = threading.Timer(timeout, p.kill)
+    killer.start()
+    chunks = []
     try:
-        p = subprocess.run(cmd, cwd=ROOT, capture_output=False, text=True,
-                           timeout=timeout)
-        text = ANSI.sub("", p.stdout + "\n" + p.stderr)
-    except subprocess.TimeoutExpired:
-        text = "TIMEOUT"
+        while True:
+            b = os.read(p.stdout.fileno(), 4096)
+            if not b:
+                break
+            t = b.decode(errors="replace")
+            chunks.append(t)
+            sys.stdout.write(t)
+            sys.stdout.flush()
+        p.wait()
+    finally:
+        timed_out = not killer.is_alive() and p.returncode is not None and p.returncode < 0
+        killer.cancel()
+    out = "".join(chunks)
+    text = ("TIMEOUT\n" if timed_out else "") + ANSI.sub("", out)
     row["wall_s"] = round(time.time() - t0, 1)
     m = RESULT.search(text)
     if m:
@@ -170,7 +186,7 @@ def default_parallel():
     """A match is ~24 processes and needs about one core while playing, more
     while starting; more than cores/2 at once slows kick-off and can push
     decisions toward the 1 s wall cap, which would distort results."""
-    return max(1, (os.cpu_count()-1))
+    return max(1, (os.cpu_count() or 2) // 2)
 
 
 def run_local(fxs, parallel, dry, out_path=None, half=0):
