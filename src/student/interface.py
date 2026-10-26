@@ -541,6 +541,7 @@ class StarterAgent(Agent):
 
     def on_ball(self, agent) -> None:
         wm = agent.wm
+        print(wm.our_team_score, wm.their_team_score, wm.cycle)
         opps = [o for o in wm.opponents if o.uniform_number > 0]
         nearest = min((o.dist_from_self for o in opps), default=1000.0)
 

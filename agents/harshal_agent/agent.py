@@ -1,6 +1,6 @@
 # Your agent goes here. The Agent1 class must hold your final submission.
 #
-# COL333 A3 - Agent1 (v1)
+# COL333 A3 - Agent1 (v31c: compute only)
 #
 # Big picture (see COL333_A3_ideas.txt for the reasoning behind every choice):
 #
@@ -50,6 +50,19 @@ from src.student.interface import StarterAgent, Action, Tools, note
 #   attackers stray from their positions .... ROLE_W up (OPEN_W down)
 #   attackers not finding space ............. OPEN_W up, ANGLE_SPREAD up
 #   decisions too slow (time budget) ........ MC_TIME_MS down, MC_MAX down
+#   (v22) holder dribbles back towards our goal  RETREAT_PEN up
+#   (v22) self-passes (kick ahead + run) lost .. SELFPASS_MIN_PRESS up, or SELFPASS = False
+#   (v22) lead passes intercepted ............ LEAD_PASS_R smaller (e.g. (4.0, 7.0))
+#   (v22) forwards too far from the holder ... FWD_MIN_AHEAD / WING_MIN_AHEAD down
+#   (v22) anchor too deep when we attack ..... ANCHOR_MAX_BEHIND down
+#   (v22) markers too deep / too goal-side ... MARK_LEAD down
+#   (v22) passes still tackled in the wind-up  ONE_STEP_PRESS up (4)
+#   (v24) still too risky with the ball ...... KEEP_BALL up (1.5), RISKY_P up (0.7)
+#   (v24) now too timid / never goes forward . KEEP_BALL down (0.5), SAFE_P up (0.9)
+#   (v25) online learning misbehaves ......... LEARN = False (or LEARN_LR down)
+#   (v26) dense options too slow / too wild .. DENSE_ACTIONS = False, or fewer
+#                                              GRID_DIRS / GRID_SPEEDS
+#   (v26) look-ahead options all too similar . DIV_W up (3.5); too odd: DIV_W down
 # After changing a number, delete __pycache__ if a quick re-run behaves the
 # same (python may reuse an old compiled copy of an edited file).
 
@@ -91,6 +104,23 @@ L_K = 1.6                 # ...plus more the closer it is to OUR goal
 GOAL_VALUE = 40.0         # must stay well above H_MAX (best position value)
 SHOT_MISS = -0.5          # missed shot ~ goal kick: we lose the ball, far from our goal
 SHOOT_NOW_P = 0.20        # shoot immediately above this goal probability
+                          # (v28: with the fitted shot model below; was 0.20)
+# --- v28 shot model FITTED on 162 real shots (peer tournament + our logs,
+# same automatic goalie for every team): logistic regression (MLE)
+#   P(goal) = sigmoid(SHOT_FIT_B0 + SHOT_FIT_DIST * distance
+#                     + SHOT_FIT_GK * min(goalie's offset from the shot line, 8))
+# raw rates: < 16 m and goalie > 5 m off the line 89 %, 16-20 m 61 %,
+# > 20 m 33 %. Our old margin model said 18 m -> 0.18, 22 m -> 0.01.
+SHOT_FIT = False
+# --- v29 driven passes: a firm ball (about FIRM_ARRIVE m/cycle when it gets
+# there) spends less time in the air; the search decides when it is worth it.
+FIRM_PASS = False
+BEHIND_JOB_W = 0.0        # v29 defence assignment: extra cost per metre a defender
+                          # is behind (further from our goal than) his job
+FIRM_ARRIVE = 2.0
+FAST_RECV = 2.2           # arriving faster than this is hard to control ...
+FAST_RECV_P = 1.0         # ... success x this
+SHOT_FIT_B0, SHOT_FIT_DIST, SHOT_FIT_GK = 0.877, -0.154, 0.386
 SHOT_RANGE = 35.0
 ONE_STEP_SPEED = 2.4      # realistic speed of a single-touch kick
 SHOT_POST_MARGIN = 0.8    # aim this far inside the posts (kick noise)
@@ -101,14 +131,15 @@ HOLD_COST = 0.3           # holding gains nothing and lets defenders close in
 HOLD_FRAC = 0.3           # ... and costs this SHARE of the position value too
                           # (v9 used 40 %: it held only ~6 % of the time and scored)
                           # (fixed cost, so it does not grow with W_PROG)
-GREEDY_P = 0.70           # greedy shortcut: forward pass this safe...
+GREEDY_P = 0.80           # greedy shortcut: forward pass this safe... (v24: was 0.70)
 GREEDY_GAP = 0.4          # ...and this much better than the runner-up
 CLEAR_VALUE = -0.9        # below this, clear (if under pressure / own third)
 THROUGH_R = 7.0
 ALLOW_THROUGH = True      # set False if through passes keep being offside
 PASS_MIN, PASS_MAX = 3.0, 35.0
 DRIB_SPEED = 0.8          # m/cycle while dribbling (log: ~1.0); 0.7 was far too slow
-DRIB_TACKLE_R = 1.2       # opponent must get this close to the ball on a dribble
+DRIB_TACKLE_R = 1.5       # opponent must get this close to the ball on a dribble
+                          # (v22: tackle_dist is 2.0 m, 1.2 was too optimistic)
 DRIB_FWD_W = 0.5          # EXTRA value per 10 m a dribble gains towards their goal
 DRIB_GAMMA = 1.0          # (no extra penalty: dribbles now get depth 2 too)
 OPEN_PRESSURE = 6         # "nobody close" = nearest opponent >= this many cycles
@@ -143,9 +174,9 @@ DRIB_ANGLES = (0.0, 25.0, -25.0, 50.0, -50.0, 80.0, -80.0, 135.0, -135.0, 180.0)
 ESCAPE_D = 3.0            # under pressure: also short escape dribbles of this length
 ESCAPE_PRESSURE = 5       # "under pressure" = an opponent within this many cycles
 DRIB_LONG1 = 10.0
-MC_DEPTH = 3              # actions per chain (root + 2 follow-ups)
-MC_TIME_MS = 80.0         # Monte Carlo time per on-ball decision (also capped by budget)
-MC_MAX = 400              # max rollouts per decision
+MC_DEPTH = 4              # actions per chain (root + 3 follow-ups)   (v31: was 3)
+MC_TIME_MS = 350.0        # Monte Carlo time per on-ball decision (v31: was 80; also capped by budget)
+MC_MAX = 3000             # max rollouts per decision (v31: was 400)
 MC_C = 1.0                # UCB1 exploration constant
 MC_PRIOR_W = 3.0          # deterministic chain value counts as this many samples
 MC_TIE = 0.15             # keep the teammates' predicted choice unless MC beats it by this
@@ -227,10 +258,92 @@ ANGLE_SPREAD = 40.0       # get-open: teammates within this angle (seen from the
 HOLD_MEMORY = 5           # cycles a dribbling teammate keeps "his" ball
 ROLE_W = 0.6              # get-open: cost per 10 m away from the role spot
 
+# --- v22 (match vs claude_light: lost 1-3 with 60 % of the ball, 1 shot)
+RUN_GAIN = 2.5            # a running player's reported velocity is AFTER the
+                          # 0.4 decay: he really moves ~2.5x that per cycle
+MARK_LEAD = 3.0           # markers aim where their man will be this many cycles on
+ONE_STEP_PRESS = 3        # opponent within this many cycles: pass in ONE kick
+                          # (a wound-up multi-kick pass got tackled 4x in the log)
+RETREAT_PEN = 0.5         # backward dribble in our own half, even under pressure (v24: 0.8)
+OWN_THIRD_BACK_PEN = 3.0  # ... and in our own third (= never, except to escape)
+SELFPASS = True           # kick the ball ahead into space and run onto it
+SELFPASS_L = (8.0, 13.0)  # ... this far
+SELFPASS_ANGLES = (0.0, 25.0, -25.0, 50.0, -50.0)
+SELFPASS_MIN_PRESS = 5    # ... only if no opponent is within this many cycles (v24: 3)
+WING_MIN_AHEAD = 2.0      # wing never drops further back than ball x + this (v24: 4)
+FWD_MIN_AHEAD = 5.0       # forward never drops further back than ball x + this (v24: 8)
+ANCHOR_GUARD = 3.0        # anchor stays this far goal-side of their deepest forward
+ANCHOR_MAX_BEHIND = 28.0  # ... but never more than this far behind the ball
+LEAD_PASS_R = (5.0, 9.0)  # lead passes: into the space this far ahead of a mate
+LEAD_PASS_ANG = (0.0, 40.0, -40.0)
+CARRIER_HEAD_W = 0.6      # presser: carrier's real running direction vs. "to goal"
+                          # (v27: 0.6 -> 0.85, FULL's wingers run straight down
+                          # the touchline and the blend aimed 3-5 m inside them)
+PRESS_CUT_D = 12.0        # v27: presser further than this cuts the path; closer
+                          # he chases a point BLOCK_D in front of the carrier
+# --- v23 (match vs FULL: every kick-off lost within 10 cycles)
+# --- v24 (user: "too uncautious with the ball, keep it like the older versions")
+KEEP_BALL = 1.0           # EXTRA cost of losing the ball (added to Loss): every
+                          # risky option looks worse, keeping it looks better
+SAFE_P = 0.85             # if some pass / dribble / hold is at least this safe ...
+RISKY_P = 0.6             # ... passes / dribbles below this are not even considered
+SELFPASS_MIN_P = 0.9      # self-pass (kick ahead + run) only when this safe
+MC_RISK_TIE = 0.5         # Monte Carlo may pick a riskier action than the safest
+                          # good one only if it is worth this much more
+RUN_PASSES = ("lead", "through", "behind", "cutback")
+# --- v25 ONLINE LEARNING during the match (ISIS-style: correct the model's
+# own parameters from its prediction errors against THIS opponent)
+LEARN = True              # set False to switch all online learning off
+LEARN_LR = 0.25           # step size (cycles of margin per unit of surprise)
+LEARN_ADJ_MIN, LEARN_ADJ_MAX = -0.5, 3.0   # learned margin offsets stay in here
+                          # (asymmetric on purpose: it may get a lot more careful,
+                          # only a little bolder - v24 asked for caution)
+LEARN_PASS_SPEED = 1.3    # ball leaving our feet faster than this = a pass
+LEARN_SPEED_Q = 0.95      # opponent speed = this quantile of observed running
+LEARN_SPEED_ETA = 0.01    # ... step size of that quantile estimate
+LEARN_SPEED_MIN, LEARN_SPEED_MAX = 0.95, 1.15
+LEARN_CARRIER_A = 0.03    # moving-average rate for their dribbling speed
+LEARN_NOTE_EVERY = 100    # write the learned values into the log this often
+# --- v26 DENSE ACTIONS: the holder scores (almost) every kick and dribble
+DENSE_ACTIONS = True      # set False to go back to the hand-picked options (v25)
+GRID_DIRS = 36            # kicks in this many directions (v31: every 10 deg, was 15) ...
+GRID_SPEEDS = (1.0, 1.5, 2.0, 2.5, 3.0)   # ... at these ball speeds (v31: 5, was 4)
+GRID_TMAX = 40            # follow each kicked ball for at most this many cycles (v31: was 30)
+DENSE_DRIB_DIRS = 24      # dribbles in this many directions (v31: every 15 deg, was 22.5)
+TOP_K = 14                # options handed to the look-ahead + Monte Carlo (v31: was 10)
+# v31: the FOLLOW-UP actions of a chain (depth 2..4) also try a coarse kick grid
+NEXT_GRID_DIRS = 12       # every 30 deg ...
+NEXT_GRID_SPEEDS = (1.6, 2.3, 3.0)
+NEXT_GRID_TMAX = 30
+# --- v27 tricks
+BOX_ATTACK_X = 999.0       # holder this far up the pitch -> box runs (cutback /
+                          # far post) replace the wing / forward spots
+CUTBACK_SPOT = (11.0, 1.5)   # cutback zone: this far in front of their goal line,
+                          # this far to the far side of the centre (penalty spot)
+FARPOST_SPOT = (5.0, 4.5)    # far-post run: this far out, this far across
+PROTECT_LEAD_CYCLE = 99999 # leading after this cycle: keep the ball, run the clock
+PROTECT_KEEP = 1.5        # ... extra cost of losing the ball while protecting
+# --- v31 tricks
+BAIT = False               # goalkeeper bait: in / near their box with the goalie
+BAIT_DIST = 20.0          # coming out (holder this close to goal, goalie within
+BAIT_GK_D = 9.0           # this of the ball) -> square balls across the goal
+FEINT = False              # sudden stop (CYRUS feint): an opponent sprinting at us
+FEINT_D = 5.0             # (within this, real speed above FEINT_V) overruns if we
+FEINT_V = 0.6             # stop the ball; value = holding now + the best dribble
+FEINT_CARRY = 1.5         # in the world where he carried on this many cycles
+DECOY = False              # decoy run: a free attacker runs at the defender who
+DECOY_R = 9.0             # guards the predicted receiver's spot (within this)
+CORNER_SHIELD = False      # protecting a lead in their half: carry it to the corner
+DIV_W = 2.5               # diversity: value lost per unit of similarity to an
+                          # option already chosen (MMR selection)
+DIV_SIGMA = 4.0           # end points this many metres apart are ~60 % similar   # passes the receiver must RUN onto:
+                          # judged on the ball reaching the TARGET (not on the
+                          # receiver touching it on the way) and on him getting there
+
 # --- time management
-ONBALL_MULT, ONBALL_CAP = 8.0, 300.0
-OFFBALL_MULT, OFFBALL_CAP = 1.0, 40.0
-SAFETY_MS = 150.0
+ONBALL_MULT, ONBALL_CAP = 12.0, 450.0   # v31: was 8 / 300
+OFFBALL_MULT, OFFBALL_CAP = 1.0, 30.0   # v31: was 40 (wall-clock safety)
+SAFETY_MS = 300.0         # v31: was 150 (a busy machine stretches wall time)
 DEPTH2_MIN_MS = 25.0
 QUICK_MIN_MS = 4.0
 QUICK_REMAIN_MS = 1500.0  # below this match budget: cheap starter behaviour
@@ -409,6 +522,11 @@ class Snap:
         self.bx, self.by = _xy(wm.ball.position)
         self.bvx, self.bvy = _xy(getattr(wm.ball, "velocity", None))
         self.offside = float(getattr(wm, "offside_line_x", self.hl) or 0.0)
+        try:
+            self.lead = int(getattr(wm, "our_team_score", 0) or 0) - int(
+                getattr(wm, "their_team_score", 0) or 0)
+        except Exception:
+            self.lead = 0
         self.our_line = float(getattr(wm, "our_defense_line_x", -self.hl) or 0.0)
         self._ball_path = None
 
@@ -574,10 +692,13 @@ def H(snap, x, y, clear):
             + W_SHOTQ * shot_quality(snap, x, y) + W_CLEAR * c - edge_pen)
 
 
+_KEEP_EXTRA = [0.0]       # v27: set per decision (protecting a lead)
+
+
 def Loss(snap, x):
     """Value of losing the ball at x: worse the closer to OUR goal."""
     prog = (x + snap.hl) / (2.0 * snap.hl)
-    return -(L_BASE + L_K * (1.0 - prog))
+    return -(L_BASE + KEEP_BALL + _KEEP_EXTRA[0] + L_K * (1.0 - prog))
 
 
 def offside_line_of(opps, ball_x):
@@ -603,6 +724,16 @@ def predict_opps(snap, rx, ry, T, frac=0.6):
                         math.degrees(math.atan2(dy, dx)), o.goalie, o.speed,
                         o.side, o.key))
     return out
+
+
+def run_vel(b):
+    """Real per-cycle displacement of a running player (reported velocity is
+    after the 0.4 player decay; a player who keeps dashing moves ~2.5x it)."""
+    sp = math.hypot(b.vx, b.vy)
+    if sp < 0.08:
+        return 0.0, 0.0
+    k = min(1.05, sp * RUN_GAIN) / sp
+    return b.vx * k, b.vy * k
 
 
 def _moving_to(b, x, y):
@@ -633,6 +764,142 @@ class Agent1(StarterAgent):
         # NOT a dict (no [] or .get), but `self` persists for each player
         # (one process per player), so state is kept here instead.
         self.mem = {}
+        self._deadline = 0.0
+        # v25 learned during the match (start = the hand-set model)
+        self.L = dict(pass_adj=0.0, drib_adj=0.0, opp_speed=OPP_SPEED,
+                      carrier=CARRIER_SPEED, n_pass=0, n_lost=0, n_drib=0, n_drib_lost=0)
+
+    def _pm0(self):
+        """Pass success curve offset: hand-set PASS_M0 + what was learned."""
+        return PASS_M0 + self.L["pass_adj"]
+
+    def _dm0(self):
+        return DRIB_M0 + self.L["drib_adj"]
+
+    # ------------------------------------------------------------ v25 learning
+    def _learn(self, agent, snap, i_have):
+        """Online learning, every cycle, from what this player observes.
+          1. PASSES (ours, by anyone): when the ball leaves one of our players'
+             feet fast, our model predicts its interception margin from the
+             real ball path; when somebody controls it we know the outcome.
+             The offset of the success curve moves by LEARN_LR * (p - y):
+             passes lost more often than predicted -> more careful, and the
+             other way round. Every player learns from ALL our passes, so the
+             four players end up with (almost) the same value and keep
+             predicting each other's choices (HFO: shared experience helps).
+          2. DRIBBLES (only the dribbler knows his prediction): same update.
+          3. OPPONENT SPEED: a high quantile of their observed running speed.
+          4. THEIR DRIBBLING SPEED: average ball speed while they carry it.
+        Then the opponents in this snapshot get the learned speed."""
+        if not LEARN:
+            return
+        L, mem = self.L, self.mem
+        wm = agent.wm
+        cyc = snap.cycle
+        mate_kick = bool(getattr(wm, "kickable_teammate_existance", False))
+        opp_kick = bool(getattr(wm, "kickable_opponent_existance", False))
+        ours = i_have or mate_kick
+        try:
+            # --- 3. opponent running speed (quantile estimate, SGD)
+            prev = mem.get("opp_prev", {})
+            cur = {}
+            for o in snap.opps:
+                cur[o.key] = (o.x, o.y, cyc)
+                q = prev.get(o.key)
+                if o.goalie or q is None or q[2] != cyc - 1:
+                    continue
+                d = math.hypot(o.x - q[0], o.y - q[1])
+                if 0.3 < d < 1.6:
+                    L["opp_speed"] += LEARN_SPEED_ETA * (LEARN_SPEED_Q - (1.0 if d < L["opp_speed"] else 0.0))
+                    L["opp_speed"] = min(LEARN_SPEED_MAX, max(LEARN_SPEED_MIN, L["opp_speed"]))
+            mem["opp_prev"] = cur
+            # --- 4. their dribbling speed (ball speed while they carry it)
+            pb = mem.get("ball_prev")
+            if pb is not None and pb[2] == cyc - 1 and opp_kick and pb[3]:
+                d = math.hypot(snap.bx - pb[0], snap.by - pb[1])
+                if d < 1.6:
+                    L["carrier"] += LEARN_CARRIER_A * (min(1.05, 1.15 * d) - L["carrier"])
+                    L["carrier"] = min(1.05, max(0.5, L["carrier"]))
+            mem["ball_prev"] = (snap.bx, snap.by, cyc, opp_kick)
+            # --- 1. passes: resolve a pending one
+            ev = mem.get("pass_ev")
+            if ev is not None and cyc > ev[0]:
+                y = None
+                if opp_kick and not ours:
+                    y = 0.0
+                elif ours and cyc - ev[0] >= 2:
+                    y = 1.0
+                elif cyc - ev[0] > 40:
+                    mem["pass_ev"] = None
+                if y is not None:
+                    p = _sig(ev[1], self._pm0(), PASS_K)
+                    L["pass_adj"] = min(LEARN_ADJ_MAX, max(LEARN_ADJ_MIN,
+                                        L["pass_adj"] + LEARN_LR * (p - y)))
+                    L["n_pass"] += 1
+                    L["n_lost"] += int(y == 0.0)
+                    mem["pass_ev"] = None
+            # --- 1. passes: detect a new one (ball just left our feet, fast)
+            sp = math.hypot(snap.bvx, snap.bvy)
+            if ours or opp_kick:
+                mem["feet"] = cyc if ours and not opp_kick else -99
+            elif (mem.get("pass_ev") is None and cyc - mem.get("feet", -99) <= 2
+                  and sp >= LEARN_PASS_SPEED and not self._is_shot(snap)):
+                # the prediction made BEFORE the kick (by the passer himself,
+                # or by me predicting him) if the ball went that way: that is
+                # the number our decisions are made with, so that is the one
+                # to calibrate
+                dec = mem.get("dec")
+                if dec is not None and cyc - dec[0] <= 4:
+                    da = abs(_norm180(math.degrees(math.atan2(snap.bvy, snap.bvx)
+                                                   - math.atan2(dec[2] - dec[5], dec[1] - dec[4]))))
+                    if da < 25.0:
+                        mem["pass_ev"] = (cyc, dec[3])
+                mem["feet"] = -99
+            # --- 2. my own dribble: resolve
+            dv = mem.get("drib_ev")
+            if dv is not None and cyc > dv[0]:
+                y = None
+                if opp_kick and not i_have:
+                    y = 0.0
+                elif cyc >= dv[0] + dv[2] + 1 and ours:
+                    y = 1.0
+                elif cyc > dv[0] + dv[2] + 8:
+                    mem["drib_ev"] = None
+                if y is not None:
+                    p = _sig(dv[1], self._dm0(), DRIB_K)
+                    L["drib_adj"] = min(LEARN_ADJ_MAX, max(LEARN_ADJ_MIN,
+                                        L["drib_adj"] + LEARN_LR * (p - y)))
+                    L["n_drib"] += 1
+                    L["n_drib_lost"] += int(y == 0.0)
+                    mem["drib_ev"] = None
+        except Exception as e:          # learning must never break a decision
+            note(agent, _err_label("learn", e))
+        for o in snap.opps:
+            if not o.goalie:
+                o.speed = L["opp_speed"]
+
+    def _learn_note(self, agent):
+        """Every LEARN_NOTE_EVERY cycles the learned values become this
+        player's label (visible in `a3.py why`): pass/drib offsets in tenths
+        of a cycle (+ = more careful), speeds in cm per cycle."""
+        try:
+            cyc = int(getattr(agent.wm, "cycle", 0) or 0)
+        except Exception:
+            return
+        if not LEARN or cyc % LEARN_NOTE_EVERY != 0:
+            return
+        L = self.L
+        note(agent, "learn_pass%+d_drib%+d_spd%d_car%d" % (
+            round(10 * L["pass_adj"]), round(10 * L["drib_adj"]),
+            round(100 * L["opp_speed"]), round(100 * L["carrier"])),
+             passes=L["n_pass"], lost=L["n_lost"], dribbles=L["n_drib"],
+             drib_lost=L["n_drib_lost"])
+
+    def _is_shot(self, snap):
+        if snap.bvx <= 0.5 or snap.bx < 15.0:
+            return False
+        t = (snap.hl - snap.bx) / snap.bvx
+        return abs(snap.by + snap.bvy * t) < snap.goal_hw + 2.0
 
     # ------------------------------------------------------------------ time
     def _budget(self, agent):
@@ -665,10 +932,16 @@ class Agent1(StarterAgent):
         except Exception as e:      # never crash a player: fall back
             note(agent, _err_label("on", e))
             StarterAgent.on_ball(self, agent)
+        self._learn_note(agent)
 
     def _on_ball(self, agent):
         t0 = time.perf_counter()
         snap = Snap(agent)
+        self._learn(agent, snap, True)
+        # v27 game management: leading late -> losing the ball costs more,
+        # holding / shielding costs nothing (runs the clock)
+        self.protect = snap.lead > 0 and snap.cycle >= PROTECT_LEAD_CYCLE
+        _KEEP_EXTRA[0] = PROTECT_KEEP if self.protect else 0.0
         self.mem["last_poss"] = "us"
         prev = self.mem.get("our_holder")
         if (prev is not None and prev[0] != snap.me.unum
@@ -684,6 +957,7 @@ class Agent1(StarterAgent):
             return
         allow = max(self._allowance(agent, snap, True), QUICK_MIN_MS)
         deadline = t0 + allow / 1000.0
+        self._deadline = deadline
         bx, by = snap.bx, snap.by
         me = snap.me
         opps = snap.opps
@@ -725,11 +999,14 @@ class Agent1(StarterAgent):
         if best_shot is not None:
             cands.append(best_shot)
         holds = self.mem.get("holds", 0) if self.mem.get("hold_cycle") == snap.cycle - 1 else 0
+        if holds:
+            cands = [c for c in cands if c.get("sub") != "feint"]   # v31: one stop, then go
         if holds < MAX_HOLDS or not cands:
             hc = self._eval_hold(snap, bx, by, pressure)
             hc["v"] -= HOLD_STALL * holds          # stalling gets worse every cycle
             hc["stall"] = HOLD_STALL * holds
             cands.append(hc)
+        cands = self._risk_filter(cands)
         cands.sort(key=lambda c: c["v"], reverse=True)
 
         # ---- 3. greedy shortcut (user's idea) ------------------------------
@@ -742,6 +1019,10 @@ class Agent1(StarterAgent):
             return
 
         # ---- 4. depth-3 chains (deterministic) as priors -------------------
+        #      v26: only the TOP_K most valuable AND most different options
+        #      (the depth-1 best is always the first one)
+        if DENSE_ACTIONS:
+            cands = self._diverse_top(cands, TOP_K)
         roots = []
         for c in cands:
             if time.perf_counter() > deadline:
@@ -763,13 +1044,16 @@ class Agent1(StarterAgent):
         # coordination: teammates predict the depth-1 best; prefer it unless
         # Monte Carlo says something is clearly better
         di = max(range(len(roots)), key=lambda i: roots[i]["c"]["v"])
-        if means[di] >= means[bi] - MC_TIE:
+        tie = MC_TIE
+        if roots[bi]["c"].get("p", 1.0) < roots[di]["c"].get("p", 1.0) - 0.1:
+            tie += MC_RISK_TIE        # v24: a RISKIER plan must win clearly
+        if means[di] >= means[bi] - tie:
             bi = di
         best = roots[bi]["c"]
         bv = means[bi]
 
         # ---- 6. fallback / execute ----------------------------------------
-        if bv < CLEAR_VALUE and (pressure <= 2 or bx < -snap.hl * 0.4):
+        if bv < CLEAR_VALUE - KEEP_BALL and (pressure <= 2 or bx < -snap.hl * 0.4):
             note(agent, "clear", v=round(bv, 2))
             self.mem["plan"] = None
             Action.clear(agent)
@@ -790,8 +1074,12 @@ class Agent1(StarterAgent):
             recv = next((m for m in snap.field_mates if m.unum == plan["recv"]), None)
             if recv is None:
                 return False
-            c = dict(kind="pass", sub="commit", tx=plan["tx"], ty=plan["ty"], n=plan["n"],
-                     v0=plan["v0"], delay=0, recv=recv)
+            c = dict(kind="pass", sub=plan.get("sub", "commit"), tx=plan["tx"], ty=plan["ty"], n=plan["n"],
+                     v0=plan["v0"], delay=0, recv=recv, one=plan.get("one", False))
+            if pressure <= ONE_STEP_PRESS and not c["one"]:
+                # v22: he is on us now - finish it with one kick, no wind-up
+                c["v0"] = min(c["v0"], ONE_STEP_SPEED) if c["v0"] < ONE_STEP_SPEED else ONE_STEP_SPEED
+                c["one"] = True
             r = self._eval_pass(snap, bx, by, c, snap.opps, -1e9)
             if r is None or r["p"] < COMMIT_P:
                 return False
@@ -826,16 +1114,31 @@ class Agent1(StarterAgent):
             Action.kick_one_step(agent, tgt)
         elif k == "pass":
             self.mem["pm_until"] = snap.cycle + PASS_MOVE_CYCLES
+            if "m" in c:
+                self.mem["dec"] = (snap.cycle, c["tx"], c["ty"], c["m"], snap.bx, snap.by)
             if not keep_plan:
                 self.mem["plan"] = dict(kind="pass", tx=c["tx"], ty=c["ty"], n=c["n"], v0=c["v0"],
                                         recv=c["recv"].unum, cycle=snap.cycle,
-                                        commit=COMMIT_PASS)
-            if pressure <= 1:
+                                        commit=COMMIT_PASS, one=c.get("one", False),
+                                        sub=c.get("sub", "commit"))
+            if c.get("one") and c["v0"] >= ONE_STEP_SPEED - 0.05:
+                Action.kick_one_step(agent, tgt)      # v22: no wind-up when pressed
+            elif c.get("one"):
+                Action.kick(agent, tgt, c["n"], accept_late=1)   # slow = one touch
+            elif pressure <= 1:
                 Action.kick_one_step(agent, tgt)      # no time for a wind-up
             else:
                 Action.kick(agent, tgt, c["n"], accept_late=5)
+        elif k == "dribble" and c.get("kick"):
+            # v22 self-pass: kick it ahead, then run onto it (see _off_ball)
+            self.mem["plan"] = None
+            self.mem["selfpass"] = (snap.cycle, c["tx"], c["ty"], c["tend"] + 4)
+            Action.kick(agent, tgt, max(1, c["n"]), accept_late=3)
+            Action.dribble(agent, tgt)
         elif k == "dribble":
             if not keep_plan:
+                if "m" in c and self.mem.get("drib_ev") is None:
+                    self.mem["drib_ev"] = (snap.cycle, c["m"], int(c.get("tend", 5)))
                 self.mem["plan"] = dict(kind="dribble", tx=c["tx"], ty=c["ty"],
                                         cycle=snap.cycle, commit=COMMIT_DRIB)
             Action.dribble(agent, tgt)
@@ -869,23 +1172,96 @@ class Agent1(StarterAgent):
                     if pressure <= 1:
                         continue
                     v0, delay = snap.vmax, 1
-                res = kick_eval(snap, sx, sy, snap.hl, gy, v0, delay, None, defenders,
-                                tmax=40, mode="shot")
-                if res is None:
-                    continue
-                margin = res[0]
-                p = _sig(margin, SHOT_M0, SHOT_K) * acc
+                if SHOT_FIT:
+                    p = self._shot_fit(snap, sx, sy, gy, v0, delay, defenders)
+                    if p is None:
+                        continue
+                else:
+                    res = kick_eval(snap, sx, sy, snap.hl, gy, v0, delay, None, defenders,
+                                    tmax=40, mode="shot")
+                    if res is None:
+                        continue
+                    margin = res[0]
+                    p = _sig(margin, SHOT_M0, SHOT_K) * acc
                 v = p * GOAL_VALUE + (1 - p) * SHOT_MISS
                 out.append(dict(kind="shot", mode=mode, tx=snap.hl, ty=gy, p=p, v=v))
         return out
 
+    def _shot_fit(self, snap, sx, sy, gy, v0, delay, defenders):
+        """v28: P(goal) from the fitted logistic model (distance, goalie's
+        offset from the shot line) x the chance no FIELD player blocks it
+        (our interception model, goalie excluded)."""
+        gk = next((d for d in defenders if d.goalie), None)
+        field = [d for d in defenders if not d.goalie]
+        dist = math.hypot(snap.hl - sx, gy - sy)
+        if gk is not None and gk.x > sx:
+            t = (gk.x - sx) / max(snap.hl - sx, 1e-6)
+            off = abs(gk.y - (sy + (gy - sy) * t))
+        else:
+            off = 8.0
+        z = SHOT_FIT_B0 + SHOT_FIT_DIST * dist + SHOT_FIT_GK * min(off, 8.0)
+        p = 1.0 / (1.0 + math.exp(-z))
+        if field:
+            res = kick_eval(snap, sx, sy, snap.hl, gy, v0, delay, None, field,
+                            tmax=40, mode="shot")
+            if res is None:
+                return None
+            p *= _sig(res[0], SHOT_M0, SHOT_K)
+        return min(p, P_CAP)
+
     # ------------------------------------------------------------ passes
+    def _eval_runpass(self, snap, bx, by, c, defenders, v0=None, ang_noise=0.0):
+        """v23: a pass into space that the receiver runs onto. The old check
+        ended as soon as the receiver could touch the ball anywhere on its
+        path, so a lead pass rolling past him into an opponent standing on the
+        target scored p 0.97 (every kick-off in the FULL match was lost that
+        way). Now: interception margin along the WHOLE path to the target, and
+        at the target the defenders' margin when the receiver gets there.
+        Returns (margin, t_end, ix, iy, end_margin, ex, ey) like kick_eval."""
+        tx, ty = c["tx"], c["ty"]
+        if ang_noise:
+            L = math.hypot(tx - bx, ty - by)
+            a = math.atan2(ty - by, tx - bx) + ang_noise
+            tx, ty = bx + L * math.cos(a), by + L * math.sin(a)
+        res = kick_eval(snap, bx, by, tx, ty, c["v0"] if v0 is None else v0, c["delay"],
+                        None, defenders, tmax=40, mode="virtual")
+        if res is None:
+            return None
+        margin, tend, ix, iy, endm, ex, ey = res
+        t_recv = reach(c["recv"], ex, ey, CTRL_R)
+        late = max(0, t_recv - tend)              # ball waits (rolls) for him
+        return min(margin, endm - late), max(tend, t_recv), ix, iy, endm - late, ex, ey
+
     def _eval_pass(self, snap, bx, by, c, defenders, alpha):
+        if c.get("sub") == "grid":
+            a = dict(c)
+            a["ang"] = math.degrees(math.atan2(c["ty"] - by, c["tx"] - bx))
+            res = self._grid_eval(snap, bx, by, a, snap.me, defenders)
+            if res is None:
+                return None
+            margin, tend, ex, ey, endm, ix, iy = res
+            p = _sig(margin, self._pm0(), PASS_K)
+            vs = H(snap, ex, ey, endm)
+            r = dict(c)
+            r.update(p=p, vs=vs, v=p * (vs - PASS_COST) + (1 - p) * Loss(snap, ix), ix=ix,
+                     iy=iy, ex=ex, ey=ey, tend=tend, endm=endm, m=margin, cut=False)
+            return r
+        if c.get("sub") in RUN_PASSES:
+            res = self._eval_runpass(snap, bx, by, c, defenders)
+            if res is None:
+                return None
+            margin, tend, ix, iy, endm, ex, ey = res
+            p = _sig(margin, self._pm0(), PASS_K)
+            vs = H(snap, ex, ey, endm)
+            r = dict(c)
+            r.update(p=p, vs=vs, v=p * (vs - PASS_COST) + (1 - p) * Loss(snap, ix), ix=ix,
+                     iy=iy, ex=ex, ey=ey, tend=tend, endm=endm, m=margin, cut=False)
+            return r
         vs_ub = H(snap, c["tx"], c["ty"], CLEAR_CAP)
         state = {"cut": False}
 
         def cut(m):
-            p = _sig(m, PASS_M0, PASS_K)
+            p = _sig(m, self._pm0(), PASS_K)
             if p * vs_ub + (1 - p) * (-L_BASE) <= alpha:
                 state["cut"] = True
                 return True
@@ -897,7 +1273,12 @@ class Agent1(StarterAgent):
         if res is None:
             return None
         margin, tend, ix, iy, endm, ex, ey = res
-        p = _sig(margin, PASS_M0, PASS_K)
+        p = _sig(margin, self._pm0(), PASS_K)
+        # v29: a ball still going fast when it reaches the receiver is
+        # sometimes not controlled
+        k = max(0, tend - c.get("delay", 0) - 1)
+        if c["v0"] * snap.decay ** k > FAST_RECV:
+            p *= FAST_RECV_P
         vs = H(snap, ex, ey, endm)
         r = dict(c)
         r.update(p=p, vs=vs, v=p * (vs - PASS_COST) + (1 - p) * Loss(snap, ix), ix=ix, iy=iy,
@@ -924,7 +1305,7 @@ class Agent1(StarterAgent):
                     margin = m
                 if t == T and m < end_m:
                     end_m = m
-        p = _sig(margin, DRIB_M0, DRIB_K)
+        p = _sig(margin, self._dm0(), DRIB_K)
         # forward carries get an extra reward proportional to the ground won
         vs = DRIB_GAMMA * H(snap, tx, ty, end_m) + DRIB_FWD_W * max(0.0, tx - bx) / 10.0
         r = dict(c)
@@ -938,7 +1319,10 @@ class Agent1(StarterAgent):
         # no shooting-position credit: the real shots were already scored
         # separately, holding does not create one
         h = H(snap, bx, by, pressure) - W_SHOTQ * shot_quality(snap, bx, by)
-        v = p * (h * (1.0 - HOLD_FRAC) - HOLD_COST) + (1 - p) * Loss(snap, bx)
+        if getattr(self, "protect", False) and bx > -10.0:
+            v = p * h + (1 - p) * Loss(snap, bx)          # v27: run the clock
+        else:
+            v = p * (h * (1.0 - HOLD_FRAC) - HOLD_COST) + (1 - p) * Loss(snap, bx)
         return dict(kind="hold", sub="hold", tx=bx, ty=by, p=p, v=v, pressure=pressure)
 
     # ------------------------------------------------------------ candidates
@@ -967,6 +1351,30 @@ class Agent1(StarterAgent):
                 bs, best = s, (px, py)
         return best
 
+    def _time_runpass(self, snap, hx, hy, c):
+        """v23: a lead pass should arrive about when the receiver does (a ball
+        that gets there long before him just rolls on to a defender)."""
+        L = math.hypot(c["tx"] - hx, c["ty"] - hy)
+        t_recv = reach(c["recv"], c["tx"], c["ty"], CTRL_R)
+        if t_recv > c["n"]:
+            v0 = max(first_speed(L, t_recv, snap.decay, snap.vmax), 1.2)
+            n = arrive_steps(L, v0, snap.decay)
+            if n is not None:
+                c["v0"], c["n"], c["delay"] = v0, n, kick_delay(v0)
+
+    def _firm(self, snap, hx, hy, c):
+        """v29: the same pass driven: arrives at ~FIRM_ARRIVE m/cycle."""
+        L = math.hypot(c["tx"] - hx, c["ty"] - hy)
+        v0 = min(snap.vmax, FIRM_ARRIVE + L * (1.0 - snap.decay))
+        if v0 <= c["v0"] + 0.2:
+            return None
+        n = arrive_steps(L, v0, snap.decay)
+        if n is None:
+            return None
+        f = dict(c)
+        f.update(sub="firm", v0=v0, n=n, delay=kick_delay(v0))
+        return f
+
     def _mk_pass(self, snap, hx, hy, tx, ty, m, sub):
         L = math.hypot(tx - hx, ty - hy)
         if L < PASS_MIN or L > PASS_MAX + 5.0:
@@ -982,7 +1390,10 @@ class Agent1(StarterAgent):
         """Fixed angles from the ball->goal line (0, +-25, +-50, +-80, back)
         plus 'away' from the nearest opponent."""
         base = math.degrees(math.atan2(-hy, snap.hl - hx))
-        dirs = [("g%+d" % int(off) if off != 180.0 else "back", base + off) for off in DRIB_ANGLES]
+        angles = DRIB_ANGLES
+        if DENSE_ACTIONS and names is None:
+            angles = tuple(-180.0 + 360.0 * i / DENSE_DRIB_DIRS for i in range(1, DENSE_DRIB_DIRS + 1))
+        dirs = [("g%+d" % int(off) if abs(off) != 180.0 else "back", base + off) for off in angles]
         near = min(opps, key=lambda o: math.hypot(o.x - hx, o.y - hy), default=None)
         if near is not None and math.hypot(near.x - hx, near.y - hy) < 15.0:
             dirs.append(("away", math.degrees(math.atan2(hy - near.y, hx - near.x))))
@@ -1026,6 +1437,11 @@ class Agent1(StarterAgent):
         Returned already scored (deterministic depth 1)."""
         raw = []
         onside = [m for m in mates if not m.goalie and self._onside(m, offside)]
+
+        def beyond_ok_lead(tx, off):
+            # a lead pass may go past the line only for a teammate who is onside
+            # now and runs onto it (like the 'behind' ball): allow 3 m beyond
+            return tx < off + 3.0
         for m in onside:
             pt = self._space_point(snap, m, opps, hx, hy)
             if pt is not None:
@@ -1037,6 +1453,10 @@ class Agent1(StarterAgent):
                 c = self._mk_pass(snap, hx, hy, fx, fy, m, "feet")
                 if c:
                     raw.append(c)
+                    if FIRM_PASS:
+                        f = self._firm(snap, hx, hy, c)
+                        if f:
+                            raw.append(f)
         if onside and ALLOW_THROUGH:
             r = max(onside, key=lambda b: (b.x, -b.unum))
             a = 0.5 * math.atan2(-r.y, snap.hl - r.x)
@@ -1059,9 +1479,78 @@ class Agent1(StarterAgent):
             if c:
                 c["v0"] = max(c["v0"], min(snap.vmax, 2.4))      # firm, so it gets there
                 raw.append(c)
+        # v22 lead passes: into the space AHEAD of a teammate (towards their
+        # goal and either side of that), he runs onto it (claude_light's
+        # passes to points around each receiver found the gaps behind a press)
+        for m in onside:
+            ga = math.atan2(-m.y, snap.hl - m.x)
+            for R_ in LEAD_PASS_R:
+                for da in LEAD_PASS_ANG:
+                    a = ga + math.radians(da)
+                    tx, ty = m.x + R_ * math.cos(a), m.y + R_ * math.sin(a)
+                    if tx < hx + 2.0 or not snap.in_field(tx, ty, 2.0):
+                        continue
+                    if not beyond_ok_lead(tx, offside):
+                        continue
+                    c = self._mk_pass(snap, hx, hy, tx, ty, m, "lead")
+                    if c:
+                        self._time_runpass(snap, hx, hy, c)
+                        raw.append(c)
+        # v27 cutback: from near their byline, a square ball back to the
+        # penalty-spot area or across to the far post, for whoever gets there
+        if hx > BOX_ATTACK_X and abs(hy) > 6.0 and onside:
+            sd = 1.0 if hy >= 0 else -1.0
+            for (dx, dy) in (CUTBACK_SPOT, FARPOST_SPOT, (8.0, -2.0)):
+                tx, ty = snap.hl - dx, -sd * dy
+                m = min(onside, key=lambda b: (reach(b, tx, ty, CTRL_R), b.unum))
+                c = self._mk_pass(snap, hx, hy, tx, ty, m, "cutback")
+                if c:
+                    self._time_runpass(snap, hx, hy, c)
+                    raw.append(c)
+        # v31 goalkeeper bait: the goalie has come out to the ball -> square
+        # balls across the goal mouth to teammates for a tap-in
+        if BAIT and onside and math.hypot(snap.hl - hx, hy) < BAIT_DIST:
+            gk = next((o for o in opps if o.goalie), None)
+            if gk is not None and math.hypot(gk.x - hx, gk.y - hy) < BAIT_GK_D:
+                for m in onside:
+                    gd = math.hypot(snap.hl - m.x, m.y)
+                    if gd > 16.0 or abs(m.y - hy) < 3.0:
+                        continue
+                    ux, uy = _unit(snap.hl - m.x, -m.y)
+                    c = self._mk_pass(snap, hx, hy, m.x + ux, m.y + uy, m, "bait")
+                    if c:
+                        raw.append(c)
+                        f = self._firm(snap, hx, hy, c) if FIRM_PASS else None
+                        if f:
+                            f["sub"] = "bait"
+                            raw.append(f)
         raw += self._dribble_dirs(snap, hx, hy, opps, pressure)
+        # v31 corner shielding: leading late in their half -> carry the ball
+        # towards their corner flag and keep it there
+        if CORNER_SHIELD and getattr(self, "protect", False) and hx > 15.0:
+            cy = snap.hw - 2.0 if hy >= 0 else -(snap.hw - 2.0)
+            a = math.degrees(math.atan2(cy - hy, snap.hl - 2.0 - hx))
+            for D in (3.0, DRIB_SHORT):
+                r_ = math.radians(a)
+                tx, ty = hx + D * math.cos(r_), hy + D * math.sin(r_)
+                if snap.in_field(tx, ty, 1.5):
+                    raw.append(dict(kind="dribble", sub="corner", tx=tx, ty=ty, D=D, ang=a))
+        # v22: an opponent within ONE_STEP_PRESS cycles -> every pass is a
+        # single kick (no wind-up he can tackle); evaluated at that speed
+        if pressure <= ONE_STEP_PRESS:
+            for c in raw:
+                if c["kind"] == "pass" and (c["delay"] > 0 or c["v0"] > ONE_STEP_SPEED):
+                    c["v0"] = min(c["v0"], ONE_STEP_SPEED) if c["delay"] == 0 else ONE_STEP_SPEED
+                    c["delay"] = 0
+                    c["one"] = True
+                    L = math.hypot(c["tx"] - hx, c["ty"] - hy)
+                    c["n"] = arrive_steps(L, c["v0"], snap.decay) or 40
+                elif c["kind"] == "pass":
+                    c["one"] = True
         out = []
         for c in raw:
+            if time.perf_counter() > self._deadline and out:
+                break                     # v31: wall-clock guard (1 s ceiling)
             if c["kind"] == "pass":
                 r = self._eval_pass(snap, hx, hy, c, opps, -1e9)
                 if r is None:
@@ -1072,11 +1561,304 @@ class Agent1(StarterAgent):
                     r["v"] -= pen * r["p"]
             else:
                 r = self._eval_dribble(snap, hx, hy, c, opps, holder_body=holder)
-                if pressure > 2 and r["tx"] < hx - 1.0:   # no retreating either
-                    r["pen"] = BACK_PASS_PEN
-                    r["v"] -= BACK_PASS_PEN * r["p"]
+                pen = self._retreat_pen(snap, r, hx, pressure)
+                if pen > 0.0:
+                    r["pen"] = pen
+                    r["v"] -= pen * r["p"]
             out.append(r)
+        if SELFPASS and pressure >= SELFPASS_MIN_PRESS:
+            out += self._selfpasses(snap, hx, hy, holder, opps)
+        if FEINT and hx > -snap.hl / 3.0:
+            f = self._feint(snap, hx, hy, holder, opps)
+            if f is not None:
+                out.append(f)
+        if DENSE_ACTIONS:
+            for c in self._grid_kicks(snap, hx, hy, holder, mates, offside, opps, pressure,
+                                      passer_unum):
+                if c["kind"] == "dribble" and (pressure < SELFPASS_MIN_PRESS
+                                               or c["p"] < SELFPASS_MIN_P):
+                    continue          # self-passes keep the v24 safety rule
+                out.append(c)
         return out
+
+    def _feint(self, snap, hx, hy, holder, opps):
+        """v31 sudden stop (CYRUS feint). An opponent sprinting at the ball
+        cannot stop at once (player decay): if we stop the ball now he carries
+        on ~FEINT_CARRY cycles past it. Value = keep it this cycle (pressure
+        in that world) x the best short dribble in that world."""
+        near = None
+        for o in opps:
+            if o.goalie:
+                continue
+            d = math.hypot(o.x - hx, o.y - hy)
+            if d > FEINT_D:
+                continue
+            vx, vy = run_vel(o)
+            sp = math.hypot(vx, vy)
+            if sp < FEINT_V:
+                continue
+            # running at (or just in front of) the ball, not away from it
+            if ((hx - o.x) * vx + (hy - o.y) * vy) / max(d * sp, 1e-6) < 0.5:
+                continue
+            if near is None or d < near[0]:
+                near = (d, o, vx, vy)
+        if near is None:
+            return None
+        _, o, vx, vy = near
+        moved = []
+        for b in opps:
+            if b.key == o.key:
+                bx_ = b.x + vx * FEINT_CARRY
+                by_ = b.y + vy * FEINT_CARRY
+                moved.append(Body(b.unum, bx_, by_, 0.0, 0.0,
+                                  math.degrees(math.atan2(vy, vx)), b.goalie, b.speed,
+                                  b.side, b.key))
+            else:
+                rv = run_vel(b)
+                moved.append(Body(b.unum, b.x + rv[0], b.y + rv[1], 0.0, 0.0, b.body,
+                                  b.goalie, b.speed, b.side, b.key))
+        press = _pressure_of(moved, hx, hy)
+        p_keep = _sig(press, HOLD_M0, HOLD_K)
+        hb = Body(holder.unum, hx, hy, 0.0, 0.0, holder.body, False, holder.speed, -1,
+                  holder.key)
+        best = None
+        for d in self._dribble_dirs(snap, hx, hy, moved, press):
+            r = self._eval_dribble(snap, hx, hy, d, moved, holder_body=hb)
+            r["v"] -= self._retreat_pen(snap, r, hx, press) * r["p"]
+            if best is None or r["v"] > best["v"]:
+                best = r
+        if best is None:
+            return None
+        v = p_keep * GAMMA * best["v"] + (1 - p_keep) * Loss(snap, hx)
+        return dict(kind="hold", sub="feint", tx=hx, ty=hy, p=p_keep * best["p"], v=v,
+                    pressure=press, then=best.get("sub"))
+
+    def _grid_kicks(self, snap, hx, hy, holder, mates, offside, opps, pressure,
+                    passer_unum=None, dirs=None, speeds_=None, tmax=None):
+        """v26: kick the ball in GRID_DIRS directions at GRID_SPEEDS speeds and
+        let the model say what happens: follow the ball cycle by cycle, the
+        FIRST player who can reach it (ours or theirs) gets it. Our first
+        player is the receiver (a teammate = a pass, me = a self-pass), the
+        gap to their first player is the margin. This covers passes to feet,
+        lead / through balls, self-passes and clearances with ONE rule, and
+        the whole ball path is always checked (the v23 bug cannot happen)."""
+        out = []
+        G = snap.G
+        hl, hw = snap.hl, snap.hw
+        decay = snap.decay
+        recvs = [holder] + [m for m in mates if not m.goalie and self._onside(m, offside)]
+        pm0 = self._pm0()
+        one = pressure <= ONE_STEP_PRESS
+        ndir = dirs or GRID_DIRS
+        tmax = tmax or GRID_TMAX
+        speeds = sorted(set(min(v, ONE_STEP_SPEED) if one else v for v in (speeds_ or GRID_SPEEDS)))
+        for k in range(ndir):
+            if time.perf_counter() > self._deadline:
+                break                     # v31: wall-clock guard (1 s ceiling)
+            a = 2.0 * math.pi * k / ndir
+            ux, uy = math.cos(a), math.sin(a)
+            for v0 in speeds:
+                path = []
+                t_out = None
+                for t in range(1, tmax + 1):
+                    sd = v0 * G[min(t, len(G) - 1)]
+                    x, y = hx + ux * sd, hy + uy * sd
+                    if abs(x) > hl or abs(y) > hw:
+                        t_out = t
+                        break
+                    path.append((x, y))
+                if not path:
+                    continue
+                T = len(path)
+                # our first player at the ball
+                tm, who = None, None
+                for b in recvs:
+                    lim = T if tm is None else min(T, tm - 1)
+                    react = 1 if b is holder else 0
+                    for t in range(1, lim + 1):
+                        x, y = path[t - 1]
+                        # a teammate who has to MOVE sees the kick a cycle late
+                        rr = react or (1 if (x - b.x) ** 2 + (y - b.y) ** 2 > 4.0 else 0)
+                        if reach(b, x, y, CTRL_R) + rr <= t:
+                            tm, who = t, b
+                            break
+                if tm is None:
+                    continue                      # nobody of ours gets it in time
+                # their first player, only as far as it can matter (tm + 4)
+                to, ix, iy = 99, None, None
+                lim = min(T, tm + 4)
+                for o in opps:
+                    r = radius_of(o, hl)
+                    for t in range(1, min(lim, to - 1) + 1):
+                        x, y = path[t - 1]
+                        if reach(o, x, y, r) <= t:
+                            to, ix, iy = t, x, y
+                            break
+                margin = min(to, tm + 5) - tm
+                rx, ry = path[tm - 1]
+                endm = min((reach(o, rx, ry, PLAYER_R) for o in opps), default=99) - tm
+                if ix is None or to > tm:
+                    ix, iy = rx, ry
+                p = _sig(margin, pm0, PASS_K)
+                if who is holder:
+                    vs = H(snap, rx, ry, endm) + DRIB_FWD_W * max(0.0, rx - hx) / 10.0
+                    c = dict(kind="dribble", sub="gkick", kick=True, tx=rx, ty=ry, v0=v0,
+                             n=tm, D=math.hypot(rx - hx, ry - hy),
+                             ang=math.degrees(a), p=p, vs=vs,
+                             v=p * vs + (1 - p) * Loss(snap, ix), ix=ix, iy=iy, ex=rx, ey=ry,
+                             tend=tm, recv=holder, m=margin, endm=endm)
+                    if c["D"] < 3.0:
+                        continue                  # a tap: the dribbles cover that
+                    pen = self._retreat_pen(snap, c, hx, pressure)
+                else:
+                    vs = H(snap, rx, ry, endm)
+                    c = dict(kind="pass", sub="grid", tx=rx, ty=ry, v0=v0, n=tm,
+                             delay=0 if (one or v0 <= 1.5) else kick_delay(v0), one=one,
+                             ang=math.degrees(a), recv=who, p=p, vs=vs,
+                             v=p * (vs - PASS_COST) + (1 - p) * Loss(snap, ix), ix=ix, iy=iy,
+                             ex=rx, ey=ry, tend=tm, endm=endm, m=margin, cut=False)
+                    pen = self._pass_pen(c, hx, pressure, passer_unum)
+                if pen > 0.0:
+                    c["pen"] = pen
+                    c["v"] -= pen * c["p"]
+                out.append(c)
+        return out
+
+    def _grid_eval(self, snap, sx, sy, a, holder, opps, rng=None):
+        """One noisy replay of a grid kick (Monte Carlo): same first-to-the-ball
+        rule as _grid_kicks, for the planned receiver only.
+        Returns (margin, t, x, y, clear, ix, iy) or None."""
+        ang = math.radians(a["ang"]) + (math.radians(rng.gauss(0.0, MC_KICK_DEG)) if rng else 0.0)
+        v0 = a["v0"] * (1.0 + (rng.gauss(0.0, 0.04) if rng else 0.0))
+        ux, uy = math.cos(ang), math.sin(ang)
+        G = snap.G
+        recv = a["recv"]
+        react = 1 if a["kind"] == "dribble" else 0
+        if a["kind"] == "dribble":
+            recv = holder
+        path = []
+        for t in range(1, GRID_TMAX + 1):
+            sd = v0 * G[min(t, len(G) - 1)]
+            x, y = sx + ux * sd, sy + uy * sd
+            if not snap.in_field(x, y, 0.0):
+                break
+            path.append((x, y))
+        tm = None
+        for t in range(1, len(path) + 1):
+            x, y = path[t - 1]
+            rr = react or (1 if (x - recv.x) ** 2 + (y - recv.y) ** 2 > 4.0 else 0)
+            if reach(recv, x, y, CTRL_R) + rr <= t:
+                tm = t
+                break
+        if tm is None:
+            return None
+        to, ix, iy = 99, None, None
+        for o in opps:
+            r = radius_of(o, snap.hl)
+            for t in range(1, min(tm + 4, len(path), to - 1) + 1):
+                x, y = path[t - 1]
+                if reach(o, x, y, r) <= t:
+                    to, ix, iy = t, x, y
+                    break
+        rx, ry = path[tm - 1]
+        endm = min((reach(o, rx, ry, PLAYER_R) for o in opps), default=99) - tm
+        if ix is None or to > tm:
+            ix, iy = rx, ry
+        return min(to, tm + 5) - tm, tm, rx, ry, endm, ix, iy
+
+    def _diverse_top(self, cands, k):
+        """v26 MMR selection (maximal marginal relevance): pick the best
+        option, then repeatedly the one with the highest
+            value - DIV_W * (similarity to the most similar option already picked)
+        so the look-ahead gets K DIFFERENT ideas, not 10 copies of one pass.
+        Similarity of two options: exp(-d^2 / 2 sigma^2) of the distance
+        between where the ball ends up, x1 if same receiver / same kind, x0.5
+        otherwise; shots vs anything else 0, holds vs anything else 0."""
+        if len(cands) <= k:
+            return list(cands)
+        rest = sorted(cands, key=lambda c: -c["v"])
+        chosen = [rest.pop(0)]
+        two_s2 = 2.0 * DIV_SIGMA * DIV_SIGMA
+
+        def sim(a, b):
+            if (a["kind"] in ("shot", "hold")) != (b["kind"] in ("shot", "hold")):
+                return 0.0
+            if a["kind"] != b["kind"] and "shot" in (a["kind"], b["kind"]):
+                return 0.0
+            ax, ay = a.get("ex", a.get("tx", 0.0)), a.get("ey", a.get("ty", 0.0))
+            bx, by = b.get("ex", b.get("tx", 0.0)), b.get("ey", b.get("ty", 0.0))
+            d2 = (ax - bx) ** 2 + (ay - by) ** 2
+            ra = getattr(a.get("recv"), "unum", a["kind"])
+            rb = getattr(b.get("recv"), "unum", b["kind"])
+            same = 1.0 if (ra == rb and a["kind"] == b["kind"]) else 0.5
+            return same * math.exp(-d2 / two_s2)
+
+        msim = [sim(c, chosen[0]) for c in rest]
+        while len(chosen) < k and rest:
+            j = max(range(len(rest)), key=lambda i: rest[i]["v"] - DIV_W * msim[i])
+            c = rest.pop(j)
+            msim.pop(j)
+            chosen.append(c)
+            msim = [max(m, sim(r, c)) for m, r in zip(msim, rest)]
+        return chosen
+
+    def _retreat_pen(self, snap, r, hx, pressure):
+        """Backward dribbles. Unpressured: BACK_PASS_PEN (no ping-pong).
+        v22: in our own half also under pressure (replay: 4 kick-offs in a
+        row the holder dribbled 10-30 m back towards our goal, one step at a
+        time, each step 'safe'; the last one lost the ball at our box)."""
+        back = hx - r["tx"]
+        if back <= 1.0:
+            return 0.0
+        pen = BACK_PASS_PEN if pressure > 2 else 0.0
+        if hx < 0.0:
+            pen += RETREAT_PEN * min(1.0, back / 5.0) * (1.0 + min(1.0, -hx / snap.hl))
+        if r["tx"] < -snap.hl / 3.0 and pressure > 1:
+            pen += OWN_THIRD_BACK_PEN
+        return pen
+
+    def _selfpasses(self, snap, hx, hy, holder, opps):
+        """v22: kick the ball 8-13 m ahead into space and run onto it (the way
+        claude_light carried the ball 25-45 m in 30 cycles; our close dribble
+        made 0.5 m/cycle, mostly sideways or back). Scored like a pass to
+        myself: interception margin along the path, and the defenders'
+        margin at the point when I get there."""
+        out = []
+        ga = math.degrees(math.atan2(-hy, snap.hl - hx))
+        for da in SELFPASS_ANGLES:
+            a = math.radians(ga + da)
+            for L in SELFPASS_L:
+                tx, ty = hx + L * math.cos(a), hy + L * math.sin(a)
+                if not snap.in_field(tx, ty, 2.0) or tx > snap.offside + 30.0:
+                    continue
+                r = self._eval_selfpass(snap, hx, hy, tx, ty, holder, opps)
+                if r is not None and r["p"] >= SELFPASS_MIN_P:
+                    r.update(sub="kick%d" % int(da), ang=ga + da, D=L)
+                    out.append(r)
+        return out
+
+    def _eval_selfpass(self, snap, hx, hy, tx, ty, holder, opps, v0=None, rng=None):
+        L = math.hypot(tx - hx, ty - hy)
+        t_me = reach(holder, tx, ty, CTRL_R) + 1           # +1: the kick cycle
+        if v0 is None:
+            v0 = first_speed(L, max(t_me, 2), snap.decay, snap.vmax)
+            v0 = min(v0, ONE_STEP_SPEED)
+            if v0 < 0.6:
+                return None
+        res = kick_eval(snap, hx, hy, tx, ty, v0, 0, None, opps,
+                        tmax=max(t_me, 4) + 6, mode="virtual")
+        if res is None:
+            return None
+        margin, tend, ix, iy, endm, ex, ey = res
+        late = max(0, t_me - tend)                  # ball waits for me
+        m = min(margin, endm - late)
+        if rng is not None:
+            return m, ex, ey, max(tend, t_me), endm - late, ix, iy
+        p = _sig(m, self._pm0(), PASS_K)
+        vs = H(snap, ex, ey, endm - late) + DRIB_FWD_W * max(0.0, ex - hx) / 10.0
+        return dict(kind="dribble", kick=True, tx=tx, ty=ty, v0=v0, n=max(tend, 2),
+                    p=p, vs=vs, v=p * vs + (1 - p) * Loss(snap, ix), ix=ix, iy=iy,
+                    ex=ex, ey=ey, tend=max(tend, t_me), recv=holder, m=m, endm=endm - late)
 
     # ------------------------------------------------------------ depth 2-3
     def _best_next(self, snap, holder, hx, hy, T, passer):
@@ -1128,6 +1910,18 @@ class Agent1(StarterAgent):
             r = self._eval_dribble(snap, hx, hy, d, popps, holder_body=hb)
             if best is None or r["v"] > best["v"]:
                 best = r
+        # v31: plus a coarse kick grid for the next holder (passes into space,
+        # lead balls, self-passes the hand-made options above do not cover)
+        if NEXT_GRID_DIRS and time.perf_counter() < self._deadline:
+            npress = _pressure_of(popps, hx, hy)
+            for r in self._grid_kicks(snap, hx, hy, hb, mates, off2, popps, npress,
+                                      passer.unum if passer is not None else None,
+                                      dirs=NEXT_GRID_DIRS, speeds_=NEXT_GRID_SPEEDS,
+                                      tmax=NEXT_GRID_TMAX):
+                if r["p"] < RISKY_P:
+                    continue
+                if best is None or r["v"] > best["v"]:
+                    best = r
         here = ((H(snap, hx, hy, 4.0) - W_SHOTQ * shot_quality(snap, hx, hy)) * (1.0 - HOLD_FRAC)
                 - HOLD_COST)
         if best is None or best["v"] <= here:
@@ -1188,13 +1982,34 @@ class Agent1(StarterAgent):
         nopps = self._noisy(opps, rng)
         if k == "hold":
             return _sig(pressure, HOLD_M0, HOLD_K), sx, sy, 1, pressure
+        if a.get("sub") in ("grid", "gkick"):
+            res = self._grid_eval(snap, sx, sy, a, holder, nopps, rng)
+            if res is None:
+                return False, sx, sy, a.get("tend", 5), 0
+            m, t, ex, ey, endm, ix, iy = res
+            if m + rng.gauss(0.0, MC_SIGMA) > self.L["pass_adj"]:
+                return True, ex, ey, t, endm
+            return False, ix, iy, t, 0
+        if k == "dribble" and a.get("kick"):
+            ang = math.radians(a["ang"] + rng.gauss(0.0, MC_KICK_DEG))
+            tx, ty = sx + a["D"] * math.cos(ang), sy + a["D"] * math.sin(ang)
+            if not snap.in_field(tx, ty, 0.5):
+                return False, sx, sy, 1, 0
+            v0 = a["v0"] * (1.0 + rng.gauss(0.0, 0.05))
+            res = self._eval_selfpass(snap, sx, sy, tx, ty, holder, nopps, v0=v0, rng=rng)
+            if res is None:
+                return False, tx, ty, a["tend"], 0
+            m, ex, ey, t, endm, ix, iy = res
+            if m + rng.gauss(0.0, MC_SIGMA) > self.L["pass_adj"]:
+                return True, ex, ey, t, endm
+            return False, ix, iy, t, 0
         if k == "dribble":
             r = math.radians(a["ang"])
             c = dict(a, tx=sx + a["D"] * math.cos(r), ty=sy + a["D"] * math.sin(r))
             if not snap.in_field(c["tx"], c["ty"], 0.5):
                 return False, sx, sy, 1, 0
             res = self._eval_dribble(snap, sx, sy, c, nopps, holder_body=holder)
-            ok = res["m"] + rng.gauss(0.0, MC_SIGMA) > MC_DRIB_OFF
+            ok = res["m"] + rng.gauss(0.0, MC_SIGMA) > MC_DRIB_OFF + self.L["drib_adj"]
             if ok:
                 return True, res["ex"], res["ey"], res["tend"], res["endm"]
             return False, res["ix"], res["iy"], res["tend"], 0
@@ -1212,13 +2027,21 @@ class Agent1(StarterAgent):
                 return 0.0, sx, sy, 1, 0
             if abs(res[6]) >= snap.goal_hw - 0.1:       # noisy kick misses the goal
                 return 0.0, res[5], res[6], res[1], 0
+            if SHOT_FIT:
+                pf = self._shot_fit(snap, sx, sy, res[6], v0,
+                                    1 if a.get("mode") == "multi" else 0, nopps)
+                return (pf or 0.0), res[5], res[6], res[1], 0
             return _sig(res[0], SHOT_M0, SHOT_K), res[5], res[6], res[1], 0
-        res = kick_eval(snap, sx, sy, ntx, nty, v0, a["delay"], a["recv"], nopps,
-                        tmax=min(40, a["n"] + 12), mode="pass")
+        if a.get("sub") in RUN_PASSES:
+            res = self._eval_runpass(snap, sx, sy, a, nopps, v0=v0,
+                                     ang_noise=math.radians(rng.gauss(0.0, MC_KICK_DEG)))
+        else:
+            res = kick_eval(snap, sx, sy, ntx, nty, v0, a["delay"], a["recv"], nopps,
+                            tmax=min(40, a["n"] + 12), mode="pass")
         if res is None:
             return False, ntx, nty, a["n"], 0
         margin, tend, ix, iy, endm, ex, ey = res
-        if margin + rng.gauss(0.0, MC_SIGMA) > 0.0:
+        if margin + rng.gauss(0.0, MC_SIGMA) > self.L["pass_adj"]:
             return True, ex, ey, tend, endm
         return False, ix, iy, tend, 0
 
@@ -1234,6 +2057,8 @@ class Agent1(StarterAgent):
             k = a["kind"]
             if k == "shot":            # ok = goal probability here
                 return total + disc * (ok * GOAL_VALUE + (1 - ok) * SHOT_MISS)
+            if a.get("sub") == "feint":   # v31: valued in its own (overrun) world
+                return total - a.get("stall", 0.0) + disc * (a["v"] + rng.gauss(0.0, 0.3))
             if k == "hold":            # ok = keep probability here
                 h = H(snap, sx, sy, pressure) - W_SHOTQ * shot_quality(snap, sx, sy)
                 return (total - a.get("stall", 0.0)
@@ -1299,7 +2124,16 @@ class Agent1(StarterAgent):
             if shots:
                 cands.append(max(shots, key=lambda c: c["v"]))
         cands.append(self._eval_hold(snap, hx, hy, pressure))
-        return max(cands, key=lambda c: c["v"])
+        return max(self._risk_filter(cands), key=lambda c: c["v"])
+
+    def _risk_filter(self, cands):
+        """v24: no gambling when a safe option exists. If any pass / dribble /
+        hold keeps the ball with p >= SAFE_P, passes and dribbles below
+        RISKY_P are dropped (shots are never dropped)."""
+        safe = any(c["kind"] in ("pass", "dribble", "hold") and c["p"] >= SAFE_P for c in cands)
+        if not safe:
+            return cands
+        return [c for c in cands if c["kind"] not in ("pass", "dribble") or c["p"] >= RISKY_P]
 
     # =================================================================
     # OFF BALL
@@ -1310,6 +2144,7 @@ class Agent1(StarterAgent):
         except Exception as e:
             note(agent, _err_label("off", e))
             StarterAgent.off_ball(self, agent)
+        self._learn_note(agent)
 
     def _off_ball(self, agent):
         t0 = time.perf_counter()
@@ -1321,6 +2156,7 @@ class Agent1(StarterAgent):
             note(agent, "quick_off_ball")
             StarterAgent.off_ball(self, agent)
             return
+        self._learn(agent, snap, False)
         allow = max(self._allowance(agent, snap, False), 1.0)
         self._deadline = t0 + allow / 1000.0
         me = snap.me
@@ -1362,6 +2198,17 @@ class Agent1(StarterAgent):
             if math.hypot(near_m.x - snap.bx, near_m.y - snap.by) < 2.0:
                 mem["our_holder"] = (near_m.unum, snap.cycle)
 
+        # --- v22 self-pass in flight: the kicker runs onto it (nobody else)
+        sp = mem.get("selfpass")
+        if sp is not None and not mate_kick and not opp_kick:
+            if snap.cycle - sp[0] <= sp[3] and our_t.get(me.unum, 99) <= opp_min + 1:
+                note(agent, "selfpass_run")
+                Action.intercept(agent)
+                return
+        if sp is not None and snap.cycle - sp[0] > 2:
+            if mate_kick or opp_kick or snap.cycle - sp[0] > sp[3]:
+                mem["selfpass"] = None
+
         # --- contested (one of ours AND one of theirs at the ball): defend.
         if mate_kick and opp_kick:
             mate_kick = False
@@ -1375,6 +2222,10 @@ class Agent1(StarterAgent):
             pred = None
             if not holder.goalie and time.perf_counter() < self._deadline:
                 pred = self._predict_holder(snap, holder)
+            if pred is not None and pred["kind"] == "pass" and "m" in pred:
+                # v25: what we expect the holder to play, with its predicted
+                # margin -> checked against the outcome if he really plays it
+                mem["dec"] = (snap.cycle, pred["tx"], pred["ty"], pred["m"], snap.bx, snap.by)
             self._attack(agent, snap, snap.bx, snap.by, {holder.unum}, False, pred)
             return
 
@@ -1609,9 +2460,19 @@ class Agent1(StarterAgent):
         # current velocity): someone already running to a task is cheaper for
         # it -> stable roles that every teammate computes identically
         best_cost, best_asg = 1e9, ()
+        # v29: a defender who is FURTHER from our goal than the job (i.e.
+        # behind it) can't get goal-side of a runner in time - replay vs FULL:
+        # the deep runner was "marked" by a player 13 m behind him. Each metre
+        # behind the job counts BEHIND_JOB_W extra metres.
+        gdist = {b.unum: math.hypot(b.x + hl, b.y) for b in markers}
+        tgd = {k: math.hypot(tpos[k][0] + hl, tpos[k][1]) for k in tids}
+        pair = {}
+        for p in markers:
+            for k in tids:
+                pair[(p.unum, k)] = (math.hypot(p.x + 3 * p.vx - tpos[k][0], p.y + 3 * p.vy - tpos[k][1])
+                                     + BEHIND_JOB_W * max(0.0, gdist[p.unum] - tgd[k] - 1.0))
         for perm in itertools.permutations(markers, len(tids)):
-            cost = sum(math.hypot(p.x + 3 * p.vx - tpos[k][0], p.y + 3 * p.vy - tpos[k][1])
-                       for p, k in zip(perm, tids))
+            cost = sum(pair[(p.unum, k)] for p, k in zip(perm, tids))
             if cost < best_cost - 1e-9:
                 best_cost, best_asg = cost, tuple((p.unum, k) for p, k in zip(perm, tids))
 
@@ -1622,7 +2483,11 @@ class Agent1(StarterAgent):
                 # zone jobs (path / screen / cover) for a player still BEHIND
                 # the ball: don't chase from behind, cut the path instead
                 if name != "mark" and not self._goal_side(snap, me, cx, cy):
-                    tx, ty = self._recovery_point(snap, me, cx, cy)
+                    # v22: if he cannot win the race to the carrier's path, run
+                    # to his OWN job (replay: 3 recovering players all ran to the
+                    # same spot near our goal and left the scorer free)
+                    if name == "path":
+                        tx, ty = self._recovery_point(snap, me, cx, cy, fallback=(tx, ty))
                     name = "recover"
                 d = math.hypot(tx - me.x, ty - me.y)
                 note(agent, "def_" + name, team=len(snap.team), marks=len(marks))
@@ -1656,13 +2521,24 @@ class Agent1(StarterAgent):
     def _mark_point(self, snap, o, cx, cy, is_top):
         """On the line from the opponent to the ball, MARK_GAP in front of
         him (cuts the pass to him), shaded slightly goal-side."""
-        lx, ly = o.x + o.vx, o.y + o.vy                    # next cycle
+        # v22: where he WILL be: a runner moves ~2.5x his reported velocity
+        # per cycle (replay: our marker trailed a runner by 5 m all the way
+        # into our box and he scored from the cross)
+        rvx, rvy = run_vel(o)
+        lx, ly = o.x + rvx * MARK_LEAD, o.y + rvy * MARK_LEAD
         bxu, byu = _unit(cx - lx, cy - ly)
         gx, gy = _unit(-snap.hl - lx, -ly)
         # ON the line man -> ball, a few metres in front of him (in the
         # passing lane, with room to react to his next move instead of
-        # trailing behind him), shaded a little towards our goal
-        dx, dy = _unit(0.8 * bxu + 0.2 * gx, 0.8 * byu + 0.2 * gy)
+        # trailing behind him), shaded a little towards our goal - much more
+        # when he is running at our goal or already close to it
+        dgoal = math.hypot(lx + snap.hl, ly)
+        at_goal = max(0.0, -(rvx * (lx + snap.hl) + rvy * ly) / max(dgoal, 1e-6))
+        gw = 0.2 + 0.4 * min(1.0, at_goal / 0.8) + 0.3 * max(0.0, 1.0 - dgoal / 30.0)
+        # v29: a man well behind the ball (closer to our goal) is a runner in
+        # behind - stand between him and the goal, not between him and the ball
+        gw = min(gw, 0.8)
+        dx, dy = _unit((1.0 - gw) * bxu + gw * gx, (1.0 - gw) * byu + gw * gy)
         dist_b = math.hypot(cx - lx, cy - ly)
         gap = min(max(MARK_GAP_MIN, 0.2 * dist_b), MARK_GAP, 0.5 * dist_b)
         return lx + dx * gap, ly + dy * gap
@@ -1732,15 +2608,24 @@ class Agent1(StarterAgent):
             return
         # where the dribble is going (ball + its velocity over 2 cycles)
         lx, ly = snap.bx + 2.0 * snap.bvx, snap.by + 2.0 * snap.bvy
-        ux, uy = _unit(-hl - lx, -ly)
+        # v22: along the way he is REALLY going (replays: carriers ran 30 m
+        # down the touchline while we blocked the straight line to goal)
+        ux, uy, _ = self._carrier_dir(snap, carrier_xy=(lx, ly))
         if not self._goal_side(snap, me, lx, ly, slack=-2.0):
             # clearly behind him: race to a point on his path we can reach first
-            rx, ry = self._recovery_point(snap, me, lx, ly)
+            rx, ry = self._recovery_point(snap, me, lx, ly, heading=True)
             note(agent, "press_recover")
             self._go(agent, snap, rx, ry, urgent=True, thr=0.5)
             return
         px, py = lx + ux * BLOCK_D, ly + uy * BLOCK_D
         bd = math.hypot(snap.bx - me.x, snap.by - me.y)
+        if bd > CLOSE_DOWN + 2.0 and math.hypot(px - me.x, py - me.y) > 4.0:
+            # goal-side but still far: cut him off where we get first instead
+            # of running after a block point that moves away with him
+            rx, ry = self._recovery_point(snap, me, lx, ly, heading=True)
+            note(agent, "press_cut")
+            self._go(agent, snap, rx, ry, urgent=True, thr=0.5)
+            return
         if math.hypot(px - me.x, py - me.y) < 1.0 or bd < BLOCK_D + 0.5:
             # in position: face the ball; if it is close, step into it
             ang = math.degrees(math.atan2(snap.by - me.y, snap.bx - me.x))
@@ -1765,22 +2650,54 @@ class Agent1(StarterAgent):
         slack > 0 is strict; slack < 0 also accepts players slightly behind."""
         return math.hypot(b.x + snap.hl, b.y) < math.hypot(cx + snap.hl, cy) - slack
 
-    def _recovery_point(self, snap, b, cx, cy):
-        """First point on the carrier's straight line to our goal that b can
-        reach BEFORE the carrier (who dribbles at ~CARRIER_SPEED). If none,
-        a point in front of our goal on that line."""
+    def _carrier_dir(self, snap, carrier_xy=None):
+        """Unit direction the ball carrier is heading + his speed: a blend of
+        where he is really going (ball velocity while he dribbles, else his own
+        running velocity) and the straight line to our goal."""
+        cx, cy = carrier_xy if carrier_xy is not None else (snap.bx, snap.by)
+        gx, gy = _unit(-snap.hl - cx, -cy)
+        car = min(snap.opps, key=lambda o: math.hypot(o.x - snap.bx, o.y - snap.by),
+                  default=None)
+        hvx, hvy = snap.bvx, snap.bvy
+        if math.hypot(hvx, hvy) < 0.3 and car is not None:
+            hvx, hvy = run_vel(car)
+        hs = math.hypot(hvx, hvy)
+        if hs < 0.2:
+            return gx, gy, 0.0
+        hx, hy = hvx / hs, hvy / hs
+        if hx * gx + hy * gy < -0.2:          # running away from our goal
+            return gx, gy, hs
+        ux, uy = _unit(CARRIER_HEAD_W * hx + (1 - CARRIER_HEAD_W) * gx,
+                       CARRIER_HEAD_W * hy + (1 - CARRIER_HEAD_W) * gy)
+        return ux, uy, hs
+
+    def _recovery_point(self, snap, b, cx, cy, heading=False, fallback=None):
+        """First point on the carrier's line to our goal (or, heading=True, on
+        the way he is really going) that b can reach BEFORE the carrier (who
+        dribbles at ~CARRIER_SPEED). If none, a point in front of our goal on
+        that line."""
         gx = -snap.hl
         L = math.hypot(gx - cx, cy)
         ux, uy = _unit(gx - cx, -cy)
+        if heading:
+            ux, uy, _ = self._carrier_dir(snap, carrier_xy=(cx, cy))
+            L = min(L, 30.0)
         # how fast is he actually going? (a shielding / standing carrier is
         # not running away; dribbling pushes the ball at about his speed)
-        v = min(CARRIER_SPEED, max(0.35, 1.2 * math.hypot(snap.bvx, snap.bvy)))
+        v = min(self.L["carrier"], max(0.35, 1.2 * math.hypot(snap.bvx, snap.bvy)))
         s = 2.0
         while s < L - 4.0:
             px, py = cx + ux * s, cy + uy * s
+            if not snap.in_field(px, py, 0.5):
+                break
             if reach(b, px, py, 0.5) <= s / v - 1.0:
                 return px, py
             s += 2.0
+        if fallback is not None:
+            return fallback
+        if heading:
+            ux, uy = _unit(gx - cx, -cy)
+            L = math.hypot(gx - cx, cy)
         # cannot win the race anywhere: get goal-side of him a bit further on
         # his path (not all the way back to the goal mouth)
         k = min(max(6.0, 2.0 * math.hypot(b.x - cx, b.y - cy)), max(L - 10.0, 0.0))
@@ -1835,7 +2752,7 @@ class Agent1(StarterAgent):
                         tmax=min(40, n + 6), mode="virtual")
         if res is None:
             return 0.0
-        return _sig(res[0], PASS_M0, PASS_K)
+        return _sig(res[0], self._pm0(), PASS_K)
 
     def _space(self, snap, x, y):
         return min((math.hypot(o.x - x, o.y - y) for o in snap.opps), default=30.0)
@@ -1931,7 +2848,14 @@ class Agent1(StarterAgent):
         # no far wing: anchor + a close SUPPORT next to the holder + the near
         # wing. If the holder has no option at all, the support "shows" first
         # (gets the job before the wing when fewer players are available).
-        if push:
+        if hx > BOX_ATTACK_X and abs(hy) > 6.0 and not brk:
+            # v27 box runs: the ball is near their byline - one player to the
+            # cutback zone (penalty spot), one to the far post
+            sd = 1.0 if hy >= 0 else -1.0
+            cut = (min(snap.hl - CUTBACK_SPOT[0], snap.offside - 0.8), -sd * CUTBACK_SPOT[1])
+            far = (min(snap.hl - FARPOST_SPOT[0], snap.offside - 0.8), -sd * FARPOST_SPOT[1])
+            tasks = [("anchor", anchor), ("box_cut", cut), ("box_far", far)][:len(players)]
+        elif push:
             # nobody available: one player comes SHORT first
             tasks = [("anchor", anchor), ("show", self._show_spot(snap, hx, hy)),
                      ("wing_near", near)][:len(players)]
@@ -1941,6 +2865,12 @@ class Agent1(StarterAgent):
             # as a pass still reaches them
             tasks = [("anchor", anchor), ("wing_near", near),
                      ("forward", self._forward_spot(snap, hx, hy, side, ahead))][:len(players)]
+            # v31 decoy run: the third attacker runs AT the defender guarding
+            # the predicted receiver's spot (from the other side), so that
+            # defender has to choose and the receiver gets more room
+            dec = self._decoy_spot(snap, hx, hy, pred) if DECOY else None
+            if dec is not None and len(tasks) == 3:
+                tasks[2] = ("decoy", dec)
 
         def d(bb, t):
             return math.hypot(bb.x + 3 * bb.vx - t[0], bb.y + 3 * bb.vy - t[1])
@@ -1950,6 +2880,20 @@ class Agent1(StarterAgent):
             if cost < best_cost - 1e-9:
                 best_cost, best = cost, {p.unum: t for p, t in zip(perm, tasks)}
         role, (tx, ty) = best.get(me.unum, ("open", _xy(Tools.home_position(agent))))
+
+        if role.startswith("box_"):
+            # small search for space around the run target (keeps the run)
+            tx, ty = self._get_open(snap, hx, hy, tx, ty, [(hx, hy)], False, radius=(2.5,))
+            note(agent, "att_" + role)
+            self._go(agent, snap, tx, ty, urgent=True, thr=0.7)
+            return
+
+        if role == "decoy":
+            if not beyond_ok:
+                tx = min(tx, snap.offside - 0.7)
+            note(agent, "att_decoy")
+            self._go(agent, snap, tx, ty, urgent=True, thr=0.7)
+            return
 
         if role == "show":
             tx, ty = self._clamp_near(snap, hx, hy, tx, ty)
@@ -1979,7 +2923,10 @@ class Agent1(StarterAgent):
                 tx, ty = fx, me.y
                 role = "pass_move"
         avoid = [(hx, hy)] + [(bb.x, bb.y) for bb in snap.field_mates]
-        tx, ty = self._get_open(snap, hx, hy, tx, ty, avoid, beyond_ok)
+        min_x = None
+        if role.startswith("wing") or role.startswith("forward"):
+            min_x = min(hx + WING_MIN_AHEAD, snap.offside - 1.5, snap.hl - 6.0)
+        tx, ty = self._get_open(snap, hx, hy, tx, ty, avoid, beyond_ok, min_x=min_x)
         if role.startswith(("wing", "forward")):
             tx, ty, checked = self._checking(snap, hx, hy, tx, ty, avoid, beyond_ok)
             if checked:
@@ -1992,6 +2939,28 @@ class Agent1(StarterAgent):
                   or beyond_ok or brk)
         note(agent, "att_" + role + ("_push" if push else "") + brk_tag)
         self._go(agent, snap, tx, ty, urgent=urgent)
+
+    def _decoy_spot(self, snap, hx, hy, pred):
+        """v31: where a decoy runner goes. Only when a pass to a teammate in
+        their half is predicted and one defender stands near its target: a
+        point 4 m past that defender on the far side from the target, 2 m
+        towards their goal (onside, inside the pitch). None otherwise."""
+        if pred is None or pred["kind"] != "pass" or hx < -5.0:
+            return None
+        tx, ty = pred.get("ex", pred["tx"]), pred.get("ey", pred["ty"])
+        if tx < 0.0:
+            return None
+        d = min((o for o in snap.opps if not o.goalie),
+                key=lambda o: math.hypot(o.x - tx, o.y - ty), default=None)
+        if d is None or math.hypot(d.x - tx, d.y - ty) > DECOY_R:
+            return None
+        ux, uy = _unit(d.x - tx, d.y - ty)
+        px, py = d.x + 4.0 * ux + 2.0, d.y + 4.0 * uy
+        px = min(px, snap.offside - 0.8, snap.hl - 4.0)
+        py = max(-snap.hw + 3.0, min(snap.hw - 3.0, py))
+        if math.hypot(px - tx, py - ty) < 5.0:
+            return None             # would crowd the receiver
+        return px, py
 
     def _better_forward_pass(self, snap, hx, hy, holder, opps, pressure, drib_v):
         """A teammate clearly better placed than carrying the ball: a very safe
@@ -2056,19 +3025,22 @@ class Agent1(StarterAgent):
         reaches (P >= WING_PASS_MIN), never past the offside line."""
         top = min(hx + ahead, snap.offside - 1.0, snap.hl - 6.0)
         best, bp = -1.0, None
+        # v22: never level with / behind the ball (vs a high press the whole
+        # team used to retreat WITH the holder, leaving him no forward option)
+        low = min(hx + FWD_MIN_AHEAD, top)
         for fy in (hy - side * 10.0, 0.0, hy - side * 4.0):
             fy = max(-snap.hw + 3.0, min(snap.hw - 3.0, fy))
             x = top
-            while x >= hx + 2.0:
+            while x >= low:
                 p = self._pass_score(snap, hx, hy, x, fy)
                 if p >= WING_PASS_MIN and math.hypot(x - hx, fy - hy) >= 8.0:
                     return x, fy
-                if p > best:
-                    best, bp = p, (x, fy)
+                if p - 0.02 * (x - low) > best:        # v22: ties -> closer to the ball
+                    best, bp = p - 0.02 * (x - low), (x, fy)
                 x -= 4.0
                 if time.perf_counter() > self._deadline:
                     break
-        return bp if bp is not None else (min(top, hx + 8.0), hy - side * 10.0)
+        return bp if bp is not None else (low, hy - side * 10.0)
 
     def _wing_spot(self, snap, hx, hy, side, ahead=WING_AHEAD):
         """Wide forward: as far forward as a pass from the holder can still
@@ -2077,20 +3049,21 @@ class Agent1(StarterAgent):
         the flank is reachable, comes inside (|y| ~ 10)."""
         top = min(hx + ahead, snap.offside - 1.0, snap.hl - 6.0)
         best, bp = -1.0, None
+        low = min(hx + WING_MIN_AHEAD, top)          # v22 (was hx - 6)
         for wy in (side * WING_Y, side * (WING_Y - 8.0)):
             if abs(wy) > snap.hw - 3.0:
                 wy = side * (snap.hw - 3.0)
             x = top
-            while x >= hx - 6.0:
+            while x >= low:
                 p = self._pass_score(snap, hx, hy, x, wy)
                 if p >= WING_PASS_MIN and math.hypot(x - hx, wy - hy) >= 8.0:
                     return x, wy                    # most forward reachable spot
-                if p > best:
-                    best, bp = p, (x, wy)
+                if p - 0.02 * (x - low) > best:        # v22: ties -> closer to the ball
+                    best, bp = p - 0.02 * (x - low), (x, wy)
                 x -= 4.0
                 if time.perf_counter() > self._deadline:
                     break
-        return bp if bp is not None else (min(top, hx), side * WING_Y)
+        return bp if bp is not None else (low, side * WING_Y)
 
     def _show_spot(self, snap, hx, hy):
         """Free spot ~SHOW_R from the holder that a short pass reaches,
@@ -2111,11 +3084,19 @@ class Agent1(StarterAgent):
     def _anchor_point(self, snap, hx, hy):
         """Deep supporter / last defender: behind the ball, central."""
         ax = min(hx - ANCHOR_BEHIND, ANCHOR_MAX_X)
-        ax = max(ax, -snap.hl + 12.0)
-        return ax, 0.35 * hy
+        ay = 0.35 * hy
+        # v22 rest defence: stay goal-side of their most advanced field player
+        # (goal 1 of the replay: their striker was already behind our anchor
+        # when we lost the ball, and ran 45 m to score unchallenged)
+        fwd = min((o for o in snap.opps if not o.goalie), key=lambda o: o.x, default=None)
+        if fwd is not None and fwd.x - ANCHOR_GUARD < ax:
+            ax = max(fwd.x - ANCHOR_GUARD, hx - ANCHOR_MAX_BEHIND)
+            ay = 0.5 * ay + 0.5 * fwd.y
+        ax = max(ax, -snap.hl + 8.0)
+        return ax, ay
 
     def _get_open(self, snap, hx, hy, rx, ry, avoid, beyond_ok, radius=(3.0, 6.0),
-                  allow_ahead=True):
+                  allow_ahead=True, min_x=None):
         """Every cycle: points around HIMSELF and around his role spot, scored by
           PASS_W * P(pass from the holder reaches me here)
           + OPEN_W * free space + GOALWARD_W * metres ahead of the ball
@@ -2142,6 +3123,8 @@ class Agent1(StarterAgent):
                 continue
             if not allow_ahead and px > hx - 5.0:
                 continue
+            if min_x is not None and px < min_x and (px, py) != (rx, ry):
+                continue          # v22: forwards stay ahead of the ball
             if math.hypot(px - hx, py - hy) < 4.0:
                 continue
             sc = self._open_score(snap, hx, hy, px, py, rx, ry, avoid)
@@ -2152,6 +3135,7 @@ class Agent1(StarterAgent):
         if prev is not None and math.hypot(prev[0] - bp[0], prev[1] - bp[1]) > 1.0:
             if (snap.in_field(prev[0], prev[1], 2.0)
                     and (beyond_ok or prev[0] <= snap.offside - 0.7)
+                    and (min_x is None or prev[0] >= min_x)
                     and math.hypot(prev[0] - rx, prev[1] - ry) < 8.0):
                 if self._open_score(snap, hx, hy, prev[0], prev[1], rx, ry, avoid) + 0.1 >= best:
                     bp = prev
