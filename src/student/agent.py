@@ -90,10 +90,13 @@ class _Mirror:
     Actions are recorded (the first one counts, as in the real game), not
     sent."""
 
-    def __init__(self, wm, server_params, home):
+    def __init__(self, wm, server_params, home, think_ms=20.0):
         self.wm = wm
         self.server_params = server_params
-        self.budget = _MNS(remaining_ms=2600.0, decision_remaining_ms=320.0)
+        # the engines size their searches from the budget: think_ms is what
+        # one of them may spend deciding for the opponent
+        self.budget = _MNS(remaining_ms=3500.0,
+                           decision_remaining_ms=300.0 + think_ms)
         self.home = home
         self.memory = {}
         self.act = None
@@ -1384,19 +1387,18 @@ class _Helios:
         return best >= thr
 
     # ================= sample_field_evaluator ==========================
-    def evaluate(self, holder_self, bx, by, t=None):
+    def evaluate(self, holder_self, bx, by, t=None, opps=None):
         ph = self.ph
         if bx > ph.hl - 0.1 and abs(by) < ph.goal_half + 2.0:
             return 1.0e7
         if abs(bx) > ph.hl or abs(by) > ph.hw:
             return -1.0e9
         v = bx + max(0.0, 40.0 - math.hypot(ph.hl - bx, by))
-        if self.can_shoot_from(holder_self, bx, by, self._opps(t)):
+        if self.can_shoot_from(holder_self, bx, by,
+                               self._opps(t) if opps is None else opps):
             v += 1.0e6
             if holder_self:
                 v += 5.0e5
-        elif self.ys_key:
-            v += 5.0 * _ys_key_density(ph, bx, by, bx, by)
         return v
 
     # ================= deeper-layer generators =======================
@@ -1457,15 +1459,16 @@ class _Helios:
     def _deep_children(self, st):
         """Children of a predicted state (chain step >= 2)."""
         ph, w = self.ph, self.w
-        holder, hx, hy, pos, olds, spend = st
+        holder, hx, hy, pos, olds, spend = st[:6]
+        ctx = st[6:]
         out = []
         offside = max(w.offside, hx)
-        opps = self._opps(spend)
+        opps = self._opps_st(st)
         # shoot (ActGen_Shoot)
         if self.can_shoot_from(holder == w.me.unum, hx, hy, opps):
             out.append((_Act("shoot", ph.hl, 0.0, holder, 1, 1, 1, ph.bmax,
                              "shoot", final=True),
-                        (holder, ph.hl, 0.0, pos, olds, spend + 1)))
+                        (holder, ph.hl, 0.0, pos, olds, spend + 1) + ctx))
         if not self.deep:
             return out
         # direct passes
@@ -1484,7 +1487,7 @@ class _Helios:
             npos[unum] = (px, py, gk)
             out.append((_Act("pass", px, py, unum, n + 2, n, 2, sp,
                              "directPass"),
-                        (unum, px, py, npos, olds | {unum}, spend + n + 2)))
+                        (unum, px, py, npos, olds | {unum}, spend + n + 2) + ctx))
         # simple dribbles
         for a in range(8):
             ang = 45.0 * a
@@ -1511,15 +1514,25 @@ class _Helios:
                 npos[holder] = (tx, ty, pos[holder][2])
                 out.append((_Act("dribble", tx, ty, holder, hstep, hstep, 1,
                                  0.0, "simpleDribble"),
-                            (holder, tx, ty, npos, olds, spend + hstep)))
+                            (holder, tx, ty, npos, olds, spend + hstep) + ctx))
         return out
 
     # ================= ActionChainGraph (best-first) ===================
     MAX_CHAIN = 4
-    ys_key = False
     opp_at = None            # t -> predicted opponents (opponent model)
+    root_ctx = None          # root action -> branch prediction, or None
+    ROOT_CTX_K = 0           # ... for this many of the best roots
+    EVAL_CAP = 20000         # chain evaluations per decision
     ORDERED_MIN = False      # move ordering in the interception MIN node
     TRANSPOSITION = False    # transposition table in the chain search
+
+    def _opps_st(self, st):
+        """Opponents at a chain state's time: from the prediction made
+        for its branch (opponents re-deciding after our first action)
+        when there is one, else the root prediction."""
+        if len(st) > 6 and st[6] is not None:
+            return st[6](int(st[5]))
+        return self._opps(st[5])
 
     def _opps(self, t):
         """Opponents as they will be t cycles from now: predicted by the
@@ -1530,7 +1543,7 @@ class _Helios:
 
     @staticmethod
     def _state_key(st):
-        holder, hx, hy, pos, olds, _ = st
+        holder, hx, hy, pos, olds = st[:5]
         return (holder, round(hx, 3), round(hy, 3), olds,
                 tuple(sorted((u, round(p[0], 3), round(p[1], 3))
                              for u, p in pos.items())))
@@ -1562,6 +1575,16 @@ class _Helios:
             pass
         heap = []
         tie = 0
+        ctxs = {}
+        if self.root_ctx is not None and self.ROOT_CTX_K > 0 and roots:
+            rank = sorted(roots, key=lambda c: -self.evaluate(
+                c.unum == me.unum, c.tx, c.ty, c.steps))
+            for c in rank[:self.ROOT_CTX_K]:
+                try:
+                    self.tick()
+                    ctxs[id(c)] = self.root_ctx(c)
+                except _Timeout:
+                    break
         for c in roots:
             npos = dict(pos0)
             if c.kind == "pass":
@@ -1570,6 +1593,8 @@ class _Helios:
                 npos[me.unum] = (c.tx, c.ty, me.goalie)
             st = (c.unum, c.tx, c.ty, npos, frozenset((me.unum, c.unum)),
                   c.steps)
+            if ctxs.get(id(c)) is not None:
+                st = st + (ctxs[id(c)],)
             ev = self.evaluate(c.unum == me.unum, c.tx, c.ty, c.steps)
             n_eval += 1
             path = (c,)
@@ -1591,45 +1616,20 @@ class _Helios:
                 self.tick()
                 for act, nst in self._deep_children(st):
                     ev = self.evaluate(act.unum == me.unum, nst[1], nst[2],
-                                       nst[5])
+                                       nst[5], self._opps_st(nst))
                     n_eval += 1
                     npath = path + (act,)
                     if ev > best_ev:
                         best_ev, best_path = ev, npath
                     tie += 1
                     heapq.heappush(heap, (-ev, tie, npath, nst))
-                    if n_eval > 20000:
+                    if n_eval > self.EVAL_CAP:
                         raise _Timeout()
         except _Timeout:
             pass
         if best_path is None:
             return None, best_ev, n_eval
         return best_path[0], best_ev, n_eval
-
-
-# --------------------------------------------------------------------------
-# YuShan2023 key receiving areas
-# --------------------------------------------------------------------------
-
-def _ys_key_density(ph, bx, by, x, y):
-    """Kernel-density map of good receiving points given the ball position.
-    YuShan2023 fit Gaussian KDEs to passes that ended in shots: from a wide
-    attacking position the receiver goes to the same-side edge of the
-    penalty area, the free forward to the middle of the box. Here the
-    kernels sit at those areas instead of being fitted from logs."""
-    if bx < 10.0:
-        return 0.0
-    if abs(by) > 12.0 and bx > 25.0:
-        s = 1.0 if by > 0.0 else -1.0
-        kern = ((ph.hl - 12.0, s * 10.0, 4.0), (ph.hl - 8.0, 0.0, 4.0))
-    else:
-        kern = ((ph.hl - 14.0, 9.0, 4.5), (ph.hl - 14.0, -9.0, 4.5),
-                (ph.hl - 9.0, 0.0, 4.0))
-    best = 0.0
-    for cx, cy, h in kern:
-        d2 = (x - cx) ** 2 + (y - cy) ** 2
-        best = max(best, math.exp(-d2 / (2.0 * h * h)))
-    return best
 
 
 # --------------------------------------------------------------------------
@@ -1848,6 +1848,7 @@ class HeliosAgent(StarterAgent):
     OFF_BALL_SHARE = 0.8
     MAX_ON_MS = 420.0
     MAX_OFF_MS = 80.0
+    ON_WALL_MARGIN = 250.0     # wall ms kept free at the end of an on-ball decision
 
     DEEP_CHAIN = True          # DirectPass / SimpleDribble at steps 2-4
     CHAIN_DEPTH = 4            # max actions per chain (helios uses 4)
@@ -1862,7 +1863,7 @@ class HeliosAgent(StarterAgent):
     # Pooled vs FULL: these three on -0.70/g (54 g), all off -0.50/g (46 g).
     G2D_STAMINA = False        # v1.1 max dash in four situations
     G2D_PRESSING = False       # v1.2 evolved pressing levels (-0.07/g)
-    G2D_VORONOI = False        # v1.4 forwards to open spots (+0.1/g)
+    G2D_OPEN_SPOT = False      # v1.4 forwards to open spots (+0.1/g)
     G2D_DEEP_FORM = False      # v1.5 defence nearer own goal (-0.30/g, 23 g)
     G2D_RISKY = False          # v1.6 risky through passes (+0.4/g)
     MC_BLOCK = False           # Alice2022-style MC block (1W-10L)
@@ -1873,6 +1874,7 @@ class HeliosAgent(StarterAgent):
     ORDERED_MIN = True         # move ordering in the interception MIN node
                                # (same candidates: 300/300 states)
     TRANSPOSITION = False      # transposition table in the chain search
+    EVAL_CAP = 20000           # chain evaluations per decision
                                # (vs FULL 58 g each: -0.69/g on, -0.34/g off)
     # football heuristics. Vs FULL, 28-30 games each: none -0.03/g,
     # on-ball five -0.79/g, off-ball three -0.62/g, all eight -0.73/g.
@@ -1885,9 +1887,6 @@ class HeliosAgent(StarterAgent):
     H_COUNTER = False          # their defence caught up field: forward goes
     H_FAR_POST = False         # ball wide in the final third: far post run
     MCTS_CHAIN = False         # UCT over the action chain
-    # YuShan (TDPs 2019-2023)
-    YS_RUN = False             # 2022 9x9 run-target grid + ranker
-    YS_KEY = False             # 2023 key receiving areas (KDE map)
 
     def __init__(self):
         super().__init__()
@@ -1982,13 +1981,13 @@ class HeliosAgent(StarterAgent):
         ph = self._phys(agent)
         w = _World(agent)
         cpu, wall = self._deadlines(agent, self._allowance_ms(agent, True),
-                                    250.0)
+                                    self.ON_WALL_MARGIN)
         hp = _Helios(ph, w, cpu, wall, self.DEEP_CHAIN, self.USE_CROSS,
                      self.GRANULARITY, self.G2D_RISKY)
-        hp.ys_key = self.YS_KEY
         hp.MAX_CHAIN = self.CHAIN_DEPTH
         hp.ORDERED_MIN = self.ORDERED_MIN
         hp.TRANSPOSITION = self.TRANSPOSITION
+        hp.EVAL_CAP = self.EVAL_CAP
         self._prep_planner(agent, ph, w, hp)
 
         # 1. Bhv_StrictCheckShoot
@@ -2307,7 +2306,7 @@ class HeliosAgent(StarterAgent):
         if self.G2D_DEEP_FORM and not our_ball and role <= 8:
             shift = 6.0 if role <= 5 else 4.0
             hx = max(-ph.hl + 4.0, hx - shift)
-        if self.G2D_VORONOI and our_ball and role >= 9:
+        if self.G2D_OPEN_SPOT and our_ball and role >= 9:
             hx, hy = self._open_spot(agent, ph, w, hx, hy)
 
         if opp_min < min(self_min, mate_min):
@@ -2328,8 +2327,6 @@ class HeliosAgent(StarterAgent):
         elif self.USE_UNMARK and mate_min < opp_min:
             if self._unmark_move(agent, ph, w, hx, hy, mate_min):
                 return True
-        elif self.YS_RUN and our_ball and role >= 6:
-            hx, hy = self._ys_run_target(agent, ph, w, hx, hy, mate_min)
         hz = self._heur_off(agent, ph, w, role, our_ball)
         if hz is not None:
             _A.go_to_point(agent, Vector2D(hz[0], hz[1]), hz[2], 1.0)
@@ -2541,10 +2538,10 @@ class HeliosAgent(StarterAgent):
 
     # ---- Gliders2d v1.4: forwards to open spots ------------------------------
     def _open_spot(self, agent, ph, w, hx, hy):
-        """Approximates the Voronoi-vertex choice: among points near the
-        formation slot and up to the offside line, take the one farthest
-        from every opponent (a largest-empty-circle centre), preferring
-        depth."""
+        """Gliders2d v1.4 sends the forward to the most open space ahead.
+        Exhaustive search (generate-and-test) over a 6 x 7 grid of points
+        near the formation slot and up to the offside line, scored by the
+        distance to the nearest opponent, depth and distance from the slot."""
         cpu, wall = self._deadlines(agent, self._allowance_ms(agent, False),
                                     400.0)
         best, best_s = (hx, hy), None
@@ -2565,79 +2562,6 @@ class HeliosAgent(StarterAgent):
                     sc -= (6.0 - dm)
                 if best_s is None or sc > best_s:
                     best_s, best = sc, (x, y)
-        return best
-
-    # ---- YuShan2022: run-target grid with a state ranker ---------------------
-    def _ys_run_target(self, agent, ph, w, hx, hy, mate_min):
-        """YuShan2022 keeps the formation point but corrects it: a 9x9 grid
-        (1 m) around it gives 81 candidate states that differ only in this
-        runner's position, and a ranker picks the best. Their ranker is a
-        LambdaMART model trained on logs; this one scores the features it
-        found most important: opponent crowding and a safe pass lane in the
-        conservative state, ball x / goal threat in the aggressive one."""
-        cpu, wall = self._deadlines(agent, self._allowance_ms(agent, False),
-                                    400.0)
-        me = w.me
-        sx, sy = ph.ball_at(w.bx, w.by, w.bvx, w.bvy, mate_min)
-        press = min((math.hypot(o.x - sx, o.y - sy) for o in w.opps),
-                    default=20.0)
-        aggressive = sx > 0.0 and press > 4.0
-        xmax = w.offside - 0.5
-        best, best_s = (hx, hy), None
-        for dx in range(-4, 5):
-            if time.process_time() > cpu or time.perf_counter() > wall:
-                break
-            x = hx + dx
-            if x > xmax or abs(x) > ph.hl - 2.0:
-                continue
-            for dy in range(-4, 5):
-                y = hy + dy
-                if abs(y) > ph.hw - 2.0:
-                    continue
-                d = math.hypot(x - sx, y - sy)
-                lane = 0.0
-                if d > 2.0:
-                    v0 = _Helios._pass_speed(d)
-                    n = ph.move_step(v0, d)
-                    lane = 1.0 if n >= 0 else 0.0
-                    if lane > 0.0:
-                        vx, vy = (x - sx) / d * v0, (y - sy) / d * v0
-                        for o in w.opps:
-                            ctrl = ph.catchable if o.goalie else ph.kickable
-                            for c in range(1, n + 1):
-                                bx, by = ph.ball_at(sx, sy, vx, vy, c)
-                                if ph.cycles_to_reach(math.hypot(
-                                        bx - o.x, by - o.y) - ctrl) <= c:
-                                    lane = 0.0
-                                    break
-                            if lane == 0.0:
-                                break
-                dopp, crowd = 10.0, 0
-                for o in w.opps:
-                    if o.goalie:
-                        continue
-                    do = math.hypot(o.x - x, o.y - y)
-                    dopp = min(dopp, do)
-                    if do < 5.0:
-                        crowd += 1
-                dm = min((math.hypot(m.x - x, m.y - y) for m in w.mates
-                          if not m.goalie), default=20.0)
-                prog = x + max(0.0, 40.0 - math.hypot(ph.hl - x, y))
-                dev = math.hypot(x - hx, y - hy)
-                key = (_ys_key_density(ph, sx, sy, x, y) if self.YS_KEY
-                       else 0.0)
-                if aggressive:
-                    s = (6.0 * lane + 0.25 * prog + 0.3 * dopp - 0.5 * crowd
-                         + 6.0 * key - 0.3 * dev)
-                else:
-                    s = (8.0 * lane + 0.6 * dopp - 1.5 * crowd + 0.08 * prog
-                         + 2.0 * key - 0.3 * dev)
-                s -= 0.8 * max(0.0, 6.0 - dm)
-                s -= 0.1 * ph.cycles_to_reach(math.hypot(x - me.x, y - me.y))
-                if best_s is None or s > best_s:
-                    best_s, best = s, (x, y)
-        _note(agent, "ys_run", x=round(best[0], 1), y=round(best[1], 1),
-             aggr=aggressive)
         return best
 
     # ---- Alice2022-style Monte-Carlo block --------------------------------
@@ -2987,10 +2911,10 @@ class HeliosAgent(StarterAgent):
 #   (v22) passes still tackled in the wind-up  ONE_STEP_PRESS up (4)
 #   (v24) still too risky with the ball ...... KEEP_BALL up (1.5), RISKY_P up (0.7)
 #   (v24) now too timid / never goes forward . KEEP_BALL down (0.5), SAFE_P up (0.9)
-#   (v25) online learning misbehaves ......... LEARN = False (or LEARN_LR down)
+#   (v25) online learning misbehaves ......... LEARN = False (or LEARN_ADJ_PRIOR down)
 #   (v26) dense options too slow / too wild .. DENSE_ACTIONS = False, or fewer
 #                                              GRID_DIRS / GRID_SPEEDS
-#   (v26) look-ahead options all too similar . DIV_W up (3.5); too odd: DIV_W down
+#   (v26) look-ahead options all too similar . DUP_D up (3.0); too odd: DUP_D down
 # After changing a number, delete __pycache__ if a quick re-run behaves the
 # same (python may reuse an old compiled copy of an edited file).
 
@@ -3222,15 +3146,16 @@ RUN_PASSES = ("lead", "through", "behind", "cutback")
 # --- v25 ONLINE LEARNING during the match (ISIS-style: correct the model's
 # own parameters from its prediction errors against THIS opponent)
 LEARN = True              # set False to switch all online learning off
-LEARN_LR = 0.25           # step size (cycles of margin per unit of surprise)
+LEARN_ADJ_STEP = 0.25     # grid of candidate margin offsets (MAP by enumeration)
+LEARN_ADJ_PRIOR = 1.0     # Gaussian prior on the offset (std, cycles)
 LEARN_ADJ_MIN, LEARN_ADJ_MAX = -0.5, 3.0   # learned margin offsets stay in here
                           # (asymmetric on purpose: it may get a lot more careful,
                           # only a little bolder - v24 asked for caution)
 LEARN_PASS_SPEED = 1.3    # ball leaving our feet faster than this = a pass
 LEARN_SPEED_Q = 0.95      # opponent speed = this quantile of observed running
-LEARN_SPEED_ETA = 0.01    # ... step size of that quantile estimate
+LEARN_SPEED_BIN = 0.05    # ... from a Laplace-smoothed histogram (MLE) of it
 LEARN_SPEED_MIN, LEARN_SPEED_MAX = 0.95, 1.15
-LEARN_CARRIER_A = 0.03    # moving-average rate for their dribbling speed
+LEARN_CARRIER_K0 = 30.0   # prior strength (observations) of their dribbling speed
 LEARN_NOTE_EVERY = 100    # write the learned values into the log this often
 # --- v26 DENSE ACTIONS: the holder scores (almost) every kick and dribble
 DENSE_ACTIONS = True      # set False to go back to the hand-picked options (v25)
@@ -3262,9 +3187,9 @@ FEINT_CARRY = 1.5         # in the world where he carried on this many cycles
 DECOY = False              # decoy run: a free attacker runs at the defender who
 DECOY_R = 9.0             # guards the predicted receiver's spot (within this)
 CORNER_SHIELD = False      # protecting a lead in their half: carry it to the corner
-DIV_W = 2.5               # diversity: value lost per unit of similarity to an
-                          # option already chosen (MMR selection)
-DIV_SIGMA = 4.0           # end points this many metres apart are ~60 % similar   # passes the receiver must RUN onto:
+DUP_D = 2.0               # look-ahead options ending this close (same kind and
+                          # receiver) count as duplicates
+                          # passes the receiver must RUN onto:
                           # judged on the ball reaching the TARGET (not on the
                           # receiver touching it on the way) and on him getting there
 
@@ -3696,6 +3621,14 @@ class ColAgent(StarterAgent):
         # v25 learned during the match (start = the hand-set model)
         self.L = dict(pass_adj=0.0, drib_adj=0.0, opp_speed=OPP_SPEED,
                       carrier=CARRIER_SPEED, n_pass=0, n_lost=0, n_drib=0, n_drib_lost=0)
+        # Bayesian / MLE state behind those numbers
+        k = int(round((LEARN_ADJ_MAX - LEARN_ADJ_MIN) / LEARN_ADJ_STEP))
+        self._adj_grid = [LEARN_ADJ_MIN + LEARN_ADJ_STEP * i for i in range(k + 1)]
+        prior = [-0.5 * (g / LEARN_ADJ_PRIOR) ** 2 for g in self._adj_grid]
+        self._lp_pass = list(prior)          # log posterior over the offset grid
+        self._lp_drib = list(prior)
+        self._spd_bins = [0] * int(round((1.6 - 0.3) / LEARN_SPEED_BIN))
+        self._car_sum, self._car_n = 0.0, 0
 
     def _pm0(self):
         """Pass success curve offset: hand-set PASS_M0 + what was learned."""
@@ -3710,14 +3643,18 @@ class ColAgent(StarterAgent):
           1. PASSES (ours, by anyone): when the ball leaves one of our players'
              feet fast, our model predicts its interception margin from the
              real ball path; when somebody controls it we know the outcome.
-             The offset of the success curve moves by LEARN_LR * (p - y):
-             passes lost more often than predicted -> more careful, and the
-             other way round. Every player learns from ALL our passes, so the
+             The offset of the success curve is a MAP estimate over a grid
+             of candidate offsets (Bayesian parameter estimation by
+             enumeration: Gaussian prior + the log-likelihood of every
+             observed outcome): passes lost more often than predicted ->
+             more careful, and the other way round. Every player learns from ALL our passes, so the
              four players end up with (almost) the same value and keep
              predicting each other's choices (HFO: shared experience helps).
           2. DRIBBLES (only the dribbler knows his prediction): same update.
-          3. OPPONENT SPEED: a high quantile of their observed running speed.
-          4. THEIR DRIBBLING SPEED: average ball speed while they carry it.
+          3. OPPONENT SPEED: the 95% quantile of a Laplace-smoothed
+             histogram of their observed running speed (MLE).
+          4. THEIR DRIBBLING SPEED: posterior mean of their ball speed while
+             they carry it (conjugate prior worth LEARN_CARRIER_K0 samples).
         Then the opponents in this snapshot get the learned speed."""
         if not LEARN:
             return
@@ -3728,7 +3665,7 @@ class ColAgent(StarterAgent):
         opp_kick = bool(getattr(wm, "kickable_opponent_existance", False))
         ours = i_have or mate_kick
         try:
-            # --- 3. opponent running speed (quantile estimate, SGD)
+            # --- 3. opponent running speed (smoothed histogram quantile)
             prev = mem.get("opp_prev", {})
             cur = {}
             for o in snap.opps:
@@ -3738,16 +3675,21 @@ class ColAgent(StarterAgent):
                     continue
                 d = math.hypot(o.x - q[0], o.y - q[1])
                 if 0.3 < d < 1.6:
-                    L["opp_speed"] += LEARN_SPEED_ETA * (LEARN_SPEED_Q - (1.0 if d < L["opp_speed"] else 0.0))
-                    L["opp_speed"] = min(LEARN_SPEED_MAX, max(LEARN_SPEED_MIN, L["opp_speed"]))
+                    b = min(len(self._spd_bins) - 1, int((d - 0.3) / LEARN_SPEED_BIN))
+                    self._spd_bins[b] += 1
+                    L["opp_speed"] = min(LEARN_SPEED_MAX, max(LEARN_SPEED_MIN,
+                                         self._speed_quantile()))
             mem["opp_prev"] = cur
             # --- 4. their dribbling speed (ball speed while they carry it)
             pb = mem.get("ball_prev")
             if pb is not None and pb[2] == cyc - 1 and opp_kick and pb[3]:
                 d = math.hypot(snap.bx - pb[0], snap.by - pb[1])
                 if d < 1.6:
-                    L["carrier"] += LEARN_CARRIER_A * (min(1.05, 1.15 * d) - L["carrier"])
-                    L["carrier"] = min(1.05, max(0.5, L["carrier"]))
+                    self._car_sum += min(1.05, 1.15 * d)
+                    self._car_n += 1
+                    mean = ((LEARN_CARRIER_K0 * CARRIER_SPEED + self._car_sum)
+                            / (LEARN_CARRIER_K0 + self._car_n))
+                    L["carrier"] = min(1.05, max(0.5, mean))
             mem["ball_prev"] = (snap.bx, snap.by, cyc, opp_kick)
             # --- 1. passes: resolve a pending one
             ev = mem.get("pass_ev")
@@ -3760,9 +3702,8 @@ class ColAgent(StarterAgent):
                 elif cyc - ev[0] > 40:
                     mem["pass_ev"] = None
                 if y is not None:
-                    p = _sig(ev[1], self._pm0(), PASS_K)
-                    L["pass_adj"] = min(LEARN_ADJ_MAX, max(LEARN_ADJ_MIN,
-                                        L["pass_adj"] + LEARN_LR * (p - y)))
+                    L["pass_adj"] = self._map_update(self._lp_pass, ev[1], y,
+                                                     PASS_M0, PASS_K)
                     L["n_pass"] += 1
                     L["n_lost"] += int(y == 0.0)
                     mem["pass_ev"] = None
@@ -3794,9 +3735,8 @@ class ColAgent(StarterAgent):
                 elif cyc > dv[0] + dv[2] + 8:
                     mem["drib_ev"] = None
                 if y is not None:
-                    p = _sig(dv[1], self._dm0(), DRIB_K)
-                    L["drib_adj"] = min(LEARN_ADJ_MAX, max(LEARN_ADJ_MIN,
-                                        L["drib_adj"] + LEARN_LR * (p - y)))
+                    L["drib_adj"] = self._map_update(self._lp_drib, dv[1], y,
+                                                     DRIB_M0, DRIB_K)
                     L["n_drib"] += 1
                     L["n_drib_lost"] += int(y == 0.0)
                     mem["drib_ev"] = None
@@ -3805,6 +3745,25 @@ class ColAgent(StarterAgent):
         for o in snap.opps:
             if not o.goalie:
                 o.speed = L["opp_speed"]
+
+    def _map_update(self, lp, margin, y, m0, k):
+        """Bayesian update of the log posterior over the offset grid with
+        one observed outcome (y = 1 success, 0 lost); -> the MAP offset."""
+        for i, g in enumerate(self._adj_grid):
+            p = min(0.98, max(0.02, _sig(margin, m0 + g, k)))
+            lp[i] += math.log(p if y >= 0.5 else 1.0 - p)
+        return self._adj_grid[max(range(len(lp)), key=lambda i: lp[i])]
+
+    def _speed_quantile(self):
+        """LEARN_SPEED_Q quantile of the running-speed histogram with
+        add-one (Laplace) smoothing."""
+        counts = [c + 1.0 for c in self._spd_bins]
+        total, acc = sum(counts), 0.0
+        for i, c in enumerate(counts):
+            acc += c
+            if acc >= LEARN_SPEED_Q * total:
+                return 0.3 + LEARN_SPEED_BIN * (i + 1)
+        return 1.6
 
     def _learn_note(self, agent):
         """Every LEARN_NOTE_EVERY cycles the learned values become this
@@ -4128,7 +4087,7 @@ class ColAgent(StarterAgent):
         else:
             off = 8.0
         z = SHOT_FIT_B0 + SHOT_FIT_DIST * dist + SHOT_FIT_GK * min(off, 8.0)
-        p = 1.0 / (1.0 + math.exp(-z))
+        p = 1.0 / (1.0 + math.exp(-max(-50.0, min(50.0, z))))
         if field:
             res = kick_eval(snap, sx, sy, snap.hl, gy, v0, delay, None, field,
                             tmax=40, mode="shot")
@@ -4695,39 +4654,33 @@ class ColAgent(StarterAgent):
         return min(to, tm + 5) - tm, tm, rx, ry, endm, ix, iy
 
     def _diverse_top(self, cands, k):
-        """v26 MMR selection (maximal marginal relevance): pick the best
-        option, then repeatedly the one with the highest
-            value - DIV_W * (similarity to the most similar option already picked)
-        so the look-ahead gets K DIFFERENT ideas, not 10 copies of one pass.
-        Similarity of two options: exp(-d^2 / 2 sigma^2) of the distance
-        between where the ball ends up, x1 if same receiver / same kind, x0.5
-        otherwise; shots vs anything else 0, holds vs anything else 0."""
+        """Beam selection: keep the k best options by value, skipping an
+        option that is a near-duplicate of one already kept (same kind and
+        receiver, ball ending within DUP_D metres) - merged the way a
+        transposition table merges equal states - so the look-ahead spends
+        its time on k DIFFERENT ideas, not 10 copies of one pass."""
         if len(cands) <= k:
             return list(cands)
-        rest = sorted(cands, key=lambda c: -c["v"])
-        chosen = [rest.pop(0)]
-        two_s2 = 2.0 * DIV_SIGMA * DIV_SIGMA
+        ranked = sorted(cands, key=lambda c: -c["v"])
 
-        def sim(a, b):
-            if (a["kind"] in ("shot", "hold")) != (b["kind"] in ("shot", "hold")):
-                return 0.0
-            if a["kind"] != b["kind"] and "shot" in (a["kind"], b["kind"]):
-                return 0.0
-            ax, ay = a.get("ex", a.get("tx", 0.0)), a.get("ey", a.get("ty", 0.0))
-            bx, by = b.get("ex", b.get("tx", 0.0)), b.get("ey", b.get("ty", 0.0))
-            d2 = (ax - bx) ** 2 + (ay - by) ** 2
-            ra = getattr(a.get("recv"), "unum", a["kind"])
-            rb = getattr(b.get("recv"), "unum", b["kind"])
-            same = 1.0 if (ra == rb and a["kind"] == b["kind"]) else 0.5
-            return same * math.exp(-d2 / two_s2)
+        def end(c):
+            return c.get("ex", c.get("tx", 0.0)), c.get("ey", c.get("ty", 0.0))
 
-        msim = [sim(c, chosen[0]) for c in rest]
-        while len(chosen) < k and rest:
-            j = max(range(len(rest)), key=lambda i: rest[i]["v"] - DIV_W * msim[i])
-            c = rest.pop(j)
-            msim.pop(j)
+        def key(c):
+            return (c["kind"], getattr(c.get("recv"), "unum", None))
+
+        chosen, skipped = [], []
+        for c in ranked:
+            cx, cy = end(c)
+            dup = any(key(b) == key(c) and math.hypot(cx - end(b)[0], cy - end(b)[1]) < DUP_D
+                      for b in chosen)
+            (skipped if dup else chosen).append(c)
+            if len(chosen) >= k:
+                break
+        for c in skipped:                 # fewer than k distinct: fill up
+            if len(chosen) >= k:
+                break
             chosen.append(c)
-            msim = [max(m, sim(r, c)) for m, r in zip(msim, rest)]
         return chosen
 
     def _retreat_pen(self, snap, r, hx, pressure):
@@ -6322,7 +6275,7 @@ class Model:
         t_goal = np.where(cross.any(axis=1), cross.argmax(axis=1), T - 1)
         tmask = np.arange(T)[None, :] <= t_goal[:, None]
         sl = np.where(tmask[:, None, :], slack, -50.0).max(axis=2).max(axis=1)
-        p = 1.0 / (1.0 + np.exp(sl / 0.6))
+        p = 1.0 / (1.0 + np.exp(np.clip(sl / 0.6, -50.0, 50.0)))
         y_at = BP[np.arange(C), t_goal, 1]
         err = 0.03 * gdist + 0.3
         p = p * np.clip((self.goal_hw - np.abs(y_at)) / err, 0.0, 1.0)
@@ -6686,7 +6639,9 @@ class LightAgent(StarterAgent):
                           v_fail)
 
         margin = np.minimum(t_o, NEVER).astype(float) - t_m
-        p = 1.0 / (1.0 + np.exp(-(margin - 1.0) * 1.3))
+        # (exponent bounded: margin is about -10000 when nobody of ours can
+        # reach the ball, which overflowed exp; p is 0 there either way)
+        p = 1.0 / (1.0 + np.exp(np.clip(-(margin - 1.0) * 1.3, -50.0, 50.0)))
         p = np.where((t_m >= t_out) | (t_m >= NEVER), 0.0, p)
         p = np.where(steal, p * 0.25, p)
 
@@ -7368,7 +7323,8 @@ class LightAgent(StarterAgent):
 #
 #   off the ball  each opponent's position t cycles ahead is
 #                     w . (inertia, HELIOS, Col, Light predictions)
-#                 w: Bayesian linear regression on the simplex. The prior
+#                 w: Bayesian linear regression on the simplex (MAP, found
+#                 by steepest-ascent hill climbing). The prior
 #                 is a fit to many teams' recordings (not FULL only), worth
 #                 OPP_KAPPA samples; every observed movement in the match is
 #                 added to the sufficient statistics and w is re-solved, so
@@ -7383,52 +7339,53 @@ class LightAgent(StarterAgent):
 # ==========================================================================
 
 OPP_PARTS = ("inertia", "helios", "col", "light")
-OPP_W0 = (0.25, 0.25, 0.25, 0.25)     # prior weights (fit to many teams)
-OPP_Q0 = ((1.0, 0.0, 0.0, 0.0), (0.0, 1.0, 0.0, 0.0), (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 0.0, 1.0))     # prior sufficient statistics, per sample
-OPP_B0 = (0.25, 0.25, 0.25, 0.25)
+OPP_W0 = (0.5278, 0.1471, 0.3251, 0.0)     # prior weights (fit to many teams)
+OPP_Q0 = ((0.16762, 0.83942, 1.05713, 0.33554), (0.83942, 19.7477, 12.25855, 7.78355), (1.05713, 12.25855, 21.37217, 6.79837), (0.33554, 7.78355, 6.79837, 18.55512))     # prior sufficient statistics, per sample
+OPP_B0 = (1.1255, 7.90208, 9.87769, 3.50531)
 OPP_KAPPA = 150.0       # prior strength, in samples
 OPP_H = 6               # horizon the weights are learned at (cycles)
 OPP_REFIT = 8           # re-solve the weights after this many new samples
 
 CAR_PARTS = ("helios", "col", "light")
-CAR_W0 = (0.3333, 0.3333, 0.3333)      # prior mixture weights (EM on recordings)
+CAR_W0 = (0.5598, 0.3506, 0.0896)      # prior mixture weights (EM on recordings)
 CAR_KAPPA = 12.0        # Dirichlet prior strength (observed decisions)
-CAR_EVERY = 3           # re-predict the carrier every this many cycles
+CAR_EVERY = 1           # re-predict the carrier every this many cycles
 CAR_SIGMA = 25.0        # direction noise of a prediction (degrees)
 CAR_CLASS = 0.75        # P(right class: kick vs keep the ball)
 
 
-def _simplex_ls(Q, b):
-    """argmin w'Qw - 2 b'w subject to w >= 0, sum w = 1 (exact: every
-    active set of the small problem is solved and the best feasible kept)."""
+def _simplex_climb(Q, b, w0, step=0.25, tol=1e-4):
+    """Steepest-ascent hill climbing on the simplex (here descending the
+    squared error E(w) = w'Qw - 2 b'w): a move shifts `step` of weight from
+    one part to another; the best improving move is taken, and the step is
+    halved when no move improves. E is convex, so the point where no shift
+    improves is the optimum over w >= 0, sum w = 1."""
     k = len(b)
-    best = None
-    for mask in range(1, 1 << k):
-        S = [i for i in range(k) if mask >> i & 1]
-        r = len(S)
-        M = np.zeros((r + 1, r + 1))
-        rhs = np.zeros(r + 1)
-        for a, i in enumerate(S):
-            for c, j in enumerate(S):
-                M[a, c] = 2.0 * Q[i][j]
-            M[a, r] = 1.0
-            M[r, a] = 1.0
-            rhs[a] = 2.0 * b[i]
-        rhs[r] = 1.0
-        try:
-            sol = np.linalg.solve(M, rhs)
-        except np.linalg.LinAlgError:
-            continue
-        if (sol[:r] < -1e-9).any():
-            continue
-        w = [0.0] * k
-        for a, i in enumerate(S):
-            w[i] = max(0.0, float(sol[a]))
-        obj = (sum(w[i] * Q[i][j] * w[j] for i in range(k) for j in range(k))
-               - 2.0 * sum(b[i] * w[i] for i in range(k)))
-        if best is None or obj < best[0]:
-            best = (obj, w)
-    return None if best is None else best[1]
+
+    def err(w):
+        return (sum(w[i] * Q[i][j] * w[j] for i in range(k) for j in range(k))
+                - 2.0 * sum(b[i] * w[i] for i in range(k)))
+
+    w = list(w0)
+    e = err(w)
+    while step > tol:
+        best = None
+        for i in range(k):
+            for j in range(k):
+                if i == j or w[j] <= 0.0:
+                    continue
+                d = min(step, w[j])
+                w2 = list(w)
+                w2[i] += d
+                w2[j] -= d
+                e2 = err(w2)
+                if e2 < e - 1e-12 and (best is None or e2 < best[0]):
+                    best = (e2, w2)
+        if best is None:
+            step *= 0.5
+        else:
+            e, w = best
+    return w
 
 
 def _ball_reach(ph, p, bx, by, bvx, bvy, ctrl, maxc=30):
@@ -7501,9 +7458,13 @@ class _OppModel:
         self.form.model = Model(sp)       # squares fit of the shared formation
         self.samples = []
         self.car_pending = []
+        self.think_ms = 20.0      # thinking time per engine decision
 
-    def _engine(self, name, unum):
-        key = (name, unum)
+    def _engine(self, name, unum, pool=""):
+        # pool: engines answering hypothetical (future) positions are
+        # kept apart, so they never disturb the memory of the ones
+        # following the real game
+        key = (pool, name, unum)
         if key not in self.eng:
             self.eng[key] = self.ENGINES[name]()
         return self.eng[key]
@@ -7570,7 +7531,7 @@ class _OppModel:
         return wm, Vector2D(hx, hy)
 
     # ---- off the ball ----------------------------------------------------
-    def targets(self, ph, v):
+    def targets(self, ph, v, pool=""):
         """-> {unum: [None, helios target, col target, light target]} for
         the opponents' field players off the ball (targets in our frame)."""
         cx = self._context(ph, v)
@@ -7582,9 +7543,9 @@ class _OppModel:
             wm, home = self._mirror(ph, v, cx, j, slots, False)
             row = [None]
             for name in OPP_PARTS[1:]:
-                m = _Mirror(wm, self.sp, home)
+                m = _Mirror(wm, self.sp, home, self.think_ms)
                 try:
-                    self._engine(name, j.unum).off_ball(m)
+                    self._engine(name, j.unum, pool).off_ball(m)
                 except Exception:
                     pass
                 row.append(self._target(ph, m, j, cx["reach"][id(j)], v))
@@ -7646,8 +7607,8 @@ class _OppModel:
 
     def learn(self, cycle, opps):
         """Bayesian linear regression: add every matured sample to the
-        sufficient statistics (prior + match) and re-solve the weights on
-        the simplex every OPP_REFIT samples."""
+        sufficient statistics (prior + match) and re-fit the MAP weights on
+        the simplex by hill climbing every OPP_REFIT samples."""
         if not self.samples:
             return
         now = {o.unum: (o.x, o.y) for o in opps}
@@ -7675,9 +7636,7 @@ class _OppModel:
                 self.n += 1
         self.samples = keep
         if self.new >= OPP_REFIT:
-            w = _simplex_ls(self.Q, self.b)
-            if w is not None:
-                self.w = w
+            self.w = _simplex_climb(self.Q, self.b, self.w)
             self.new = 0
 
     # ---- the carrier -----------------------------------------------------
@@ -7695,7 +7654,7 @@ class _OppModel:
         wm, home = self._mirror(ph, v, cx, j, slots, True)
         preds = []
         for name in CAR_PARTS:
-            m = _Mirror(wm, self.sp, home)
+            m = _Mirror(wm, self.sp, home, self.think_ms)
             try:
                 self._engine(name, j.unum).on_ball(m)
             except Exception:
@@ -7798,7 +7757,17 @@ class Agent1(HeliosAgent):
     OPP_LEARN = True          # update the model during the match
     CARRIER_MODEL = True      # defend against the predicted carrier action
     CHAIN_DEPTH = 6           # deeper tree than HELIOS's 4
-    SAMPLE_EVERY = 5          # learning samples while we have the ball
+    SAMPLE_EVERY = 2          # learning samples while we have the ball
+    # more of the budget (agent A: 0.68 / 12 / 420 / 0.8 / 80 / 20000)
+    SPEND_FRACTION = 0.85     # share of the match budget to spend
+    ON_BALL_SHARE = 24.0      # an on-ball decision gets ~24 cycles' worth
+    MAX_ON_MS = 450.0         # (was 650: decisions overran 1 s on busy machines)
+    OFF_BALL_SHARE = 2.5
+    MAX_OFF_MS = 120.0        # (was 160)
+    ON_WALL_MARGIN = 450.0    # wall ms kept free after the on-ball search (A: 250)
+    EVAL_CAP = 100000         # chain evaluations per decision
+    ROOT_REPLAN_MS = 12.0     # time per root whose opponents re-decide
+    ROOT_REPLAN_MAX = 16      # ... at most this many roots
     SAMPLE_MIN_FRAC = 0.35    # ... only while this share of the budget is left
 
     def __init__(self):
@@ -7856,6 +7825,38 @@ class Agent1(HeliosAgent):
             return cache[t]
 
         hp.opp_at = opp_at
+
+        def root_ctx(c):
+            # the opponents re-decide once our first action has played
+            # out: ball at its target, receiver (or me) there, the others
+            # carried on; their engines run again on that position
+            t0 = max(1, int(c.steps))
+            opp0 = om.predict(ph, w.opps, tg, t0)
+            mover = c.unum if c.kind == "pass" else w.me.unum
+            mates = []
+            for m in list(w.mates) + [w.me]:
+                if m.unum == mover:
+                    mates.append(_P(m.unum, c.tx, c.ty, 0.0, 0.0, m.body, m.goalie, False))
+                else:
+                    x, y = ph.inertia(m, t0)
+                    mates.append(_P(m.unum, x, y, 0.0, 0.0, m.body, m.goalie, False))
+            v2 = _MNS(mates=mates, opps=opp0, bx=c.tx, by=c.ty, bvx=0.0, bvy=0.0,
+                      cycle=w.cycle + t0, score_us=0, score_them=0, gmode=0)
+            tg2 = om.targets(ph, v2, "future")
+            cache2 = {}
+
+            def at(t):
+                if t < t0:
+                    return opp_at(t)
+                if t not in cache2:
+                    cache2[t] = om.predict(ph, opp0, tg2, t - t0)
+                return cache2[t]
+            return at
+
+        allow = self._allowance_ms(agent, True)
+        hp.root_ctx = root_ctx
+        hp.ROOT_CTX_K = int(max(0.0, min(self.ROOT_REPLAN_MAX,
+                                         0.5 * allow / self.ROOT_REPLAN_MS)))
         if self.OPP_LEARN:
             om.add_sample(ph, w.cycle, w.opps, tg)
             self._last_sample = w.cycle
@@ -7874,7 +7875,11 @@ class Agent1(HeliosAgent):
             if bool(wm.kickable_opponent_existance) and self._budget_ok(agent):
                 ph = self._phys(agent)
                 w = _World(agent)
-                hint = self._model(agent).hint(ph, self._view(agent, w), cyc)
+                om = self._model(agent)
+                # the carrier's three engines share this decision's time
+                om.think_ms = max(8.0, min(40.0, self._allowance_ms(agent, False) / 3.0))
+                hint = om.hint(ph, self._view(agent, w), cyc)
+                om.think_ms = 20.0
             self._hint = (key, hint)
             return hint
         except Exception as e:
