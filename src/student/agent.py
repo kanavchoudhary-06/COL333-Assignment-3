@@ -6357,15 +6357,15 @@ class Agent1(TacticalAgent):
     META = True
     CHAIN_DEPTH = 6
     SAMPLE_EVERY = 2
-    SPEND_FRACTION = 0.85
+    SPEND_FRACTION = 0.75
     ON_BALL_SHARE = 24.0
-    MAX_ON_MS = 450.0
-    OFF_BALL_SHARE = 2.5
-    MAX_OFF_MS = 120.0
-    ON_WALL_MARGIN = 450.0
+    MAX_ON_MS = 300.0
+    OFF_BALL_SHARE = 2.0
+    MAX_OFF_MS = 80.0
+    ON_WALL_MARGIN = 600.0
     EVAL_CAP = 100000
     ROOT_REPLAN_MS = 12.0
-    ROOT_REPLAN_MAX = 16
+    ROOT_REPLAN_MAX = 10
     SAMPLE_MIN_FRAC = 0.35
 
     def __init__(self):
@@ -6461,7 +6461,7 @@ class Agent1(TacticalAgent):
                 ph = self._phys(agent)
                 w = _WorldView(agent)
                 om = self._model(agent)
-                om.think_ms = max(8.0, min(40.0, self._allowance_ms(agent, False) / 3.0))
+                om.think_ms = max(8.0, min(25.0, self._allowance_ms(agent, False) / 3.0))
                 hint = om.hint(ph, self._view(agent, w), cyc)
                 om.think_ms = 20.0
             self._hint = (key, hint)
