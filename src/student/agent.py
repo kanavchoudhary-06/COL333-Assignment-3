@@ -555,7 +555,29 @@ class _Act:
 # HELIOS planner port
 # --------------------------------------------------------------------------
 
+def _keeper_margin(ph, bx, by, tx, ty, speed, gk, delay=0):
+    """How far (m) the keeper stays from the ball's path towards (tx, ty):
+    his distance to the nearest point of the path, minus his catch reach
+    (1.3 m), minus what he runs (1 m/cycle) before the ball passes that
+    point. Positive: he cannot get there. Fitted on recorded shots (see
+    _gap_shot)."""
+    if gk is None:
+        return 99.0
+    dist = math.hypot(tx - bx, ty - by)
+    if dist < 1e-6:
+        return 99.0
+    ux, uy = (tx - bx) / dist, (ty - by) / dist
+    t = max(0.0, min(dist, (gk.x - bx) * ux + (gk.y - by) * uy))
+    lat = math.hypot(gk.x - (bx + ux * t), gk.y - (by + uy * t))
+    n = ph.move_step(speed, t) if t > 0.0 else 0
+    if n < 0:
+        n = 60
+    return lat - 1.3 - max(0, n + delay - 1) * 1.0
+
+
 class _Helios:
+    SAFE = 0        # extra cycles an opponent must be late by (meta mode)
+
     def __init__(self, ph, w, deadline_cpu, deadline_wall, deep=True,
                  cross=True, gran=1, risky=False):
         self.risky = risky
@@ -753,7 +775,7 @@ class _Helios:
             if (self.risky and w.bx < w.offside and tx > w.offside + 3.0
                     and w.offside - r.x < 5.0):
                 risk = 5        # Gliders2d v1.6 value against helios-base
-            o_step += risk
+            o_step += risk - self.SAFE
             if ptype == "T":
                 failed = o_step <= step
                 if (tx > 30.0 and step >= 15 and (opp is None
@@ -1097,7 +1119,7 @@ class _Helios:
                 bonus += 1
             if o.tackling:
                 bonus = -5
-            if n_step - bonus <= step:
+            if n_step - bonus - self.SAFE <= step:
                 return False
         return True
 
@@ -1209,7 +1231,7 @@ class _Helios:
                 bonus += 1
             else:
                 bonus = 0
-            if n_step - bonus <= n:
+            if n_step - bonus - self.SAFE <= n:
                 return False
         return True
 
@@ -1394,12 +1416,40 @@ class _Helios:
         if abs(bx) > ph.hl or abs(by) > ph.hw:
             return -1.0e9
         v = bx + max(0.0, 40.0 - math.hypot(ph.hl - bx, by))
-        if self.can_shoot_from(holder_self, bx, by,
-                               self._opps(t) if opps is None else opps):
+        ops = self._opps(t) if opps is None else opps
+        if self.can_shoot_from(holder_self, bx, by, ops):
             v += 1.0e6
             if holder_self:
                 v += 5.0e5
+        elif self.GAP_EVAL and self._gap_open(bx, by, ops):
+            v += 5.0e5          # a _gap_shot will be there (lower bonus)
         return v
+
+    GAP_EVAL = False         # value spots with a keeper-gap shot (_gap_shot)
+
+    def _gap_open(self, x, y, opps):
+        """Within 18 m, a direction into the goal the keeper cannot get to
+        (_keeper_margin >= 0 at 2.7 m/cycle) with no field player within 8
+        degrees of it nearer than the goal."""
+        ph = self.ph
+        d = math.hypot(ph.hl - x, y)
+        if d > 18.0:
+            return False
+        gk = next((o for o in opps if o.goalie), None)
+        lim = ph.goal_half - 0.8
+        blk = []
+        for o in opps:
+            if o.goalie:
+                continue
+            if math.hypot(o.x - x, o.y - y) < d:
+                blk.append(math.degrees(math.atan2(o.y - y, o.x - x)))
+        for ty in (-lim, -lim / 2.0, 0.0, lim / 2.0, lim):
+            if _keeper_margin(ph, x, y, ph.hl + 0.5, ty, 2.7, gk, 0) < 0.0:
+                continue
+            a = math.degrees(math.atan2(ty - y, ph.hl - x))
+            if all(abs(_norm(a - b)) > 8.0 for b in blk):
+                return True
+        return False
 
     # ================= deeper-layer generators =======================
     # ActGen_DirectPass + SimplePassChecker and ActGen_SimpleDribble:
@@ -1453,7 +1503,7 @@ class _Helios:
             thr = 14.5
         if h_goalie:
             thr = 15.0
-        thr *= 2.5 / speed
+        thr *= (2.5 / speed) * (1.0 + 0.2 * self.SAFE)
         return cone > thr
 
     def _deep_children(self, st):
@@ -1838,6 +1888,53 @@ def _uct_chain(hp, rnd, max_iter=100000):
 
 
 # --------------------------------------------------------------------------
+# Meta-reasoning on the score
+#   The match result is what counts (win / draw / loss), not the goal
+#   difference. A finite-horizon MDP: state (goal difference, time slices
+#   left), action = playing mode, each mode scaling both teams' scoring
+#   rates. Each slice either side may score (Poisson rates); the terminal
+#   reward is the utility of the result. Solved by backward induction
+#   (value iteration over the horizon). The rates are the posterior mean
+#   of a Gamma prior updated by the goals of this match (Bayesian
+#   updating of a Poisson rate).
+# --------------------------------------------------------------------------
+
+def _meta_policy(lead, left, elapsed, gf, ga, total, slice_, util, g0, kappa,
+                 effect):
+    """-> the mode maximising expected match utility now."""
+    k = int(math.ceil(left / float(slice_)))
+    if k <= 0:
+        return "normal"
+    prior = kappa * total               # prior exposure, cycles
+    lu = (g0 * kappa + gf) / (prior + elapsed)    # goals per cycle, us
+    lt = (g0 * kappa + ga) / (prior + elapsed)    # ... them
+    D = 6
+    n = 2 * D + 1
+    V = [util[0] if d > 0 else util[1] if d == 0 else util[2]
+         for d in range(-D, D + 1)]
+    probs = []
+    for a, (mu, mt) in effect:
+        pu = 1.0 - math.exp(-lu * mu * slice_)
+        pt = 1.0 - math.exp(-lt * mt * slice_)
+        probs.append((a, pu * (1.0 - pt), pt * (1.0 - pu),
+                      pu * pt + (1.0 - pu) * (1.0 - pt)))
+    pol = None
+    for _ in range(k):
+        nv, pol = [], []
+        for i in range(n):
+            up, dn = V[min(i + 1, n - 1)], V[max(i - 1, 0)]
+            best_q, best_a = None, None
+            for a, p_up, p_dn, p_eq in probs:      # "normal" listed first:
+                q = p_up * up + p_dn * dn + p_eq * V[i]   # kept on ties
+                if best_q is None or q > best_q + 1e-9:
+                    best_q, best_a = q, a
+            nv.append(best_q)
+            pol.append(best_a)
+        V = nv
+    return pol[max(0, min(n - 1, lead + D))]
+
+
+# --------------------------------------------------------------------------
 # The team
 # --------------------------------------------------------------------------
 
@@ -1887,9 +1984,36 @@ class HeliosAgent(StarterAgent):
     H_COUNTER = False          # their defence caught up field: forward goes
     H_FAR_POST = False         # ball wide in the final third: far post run
     MCTS_CHAIN = False         # UCT over the action chain
+    GAP_SHOT = False           # shoot past the keeper's side (_gap_shot)
+    GAP_SHOT_DIST = 25.0
+    GAP_MARGIN = 0.0           # keeper reach margin needed (m)
+    GAP_EVAL = False           # the planner values spots with such a shot
+    PRESS = False              # nearest of us goes at a carrier in our half
+    PRESS_X = 0.0
+    # meta-reasoning on the score (_meta_policy): protect a lead, chase a
+    # deficit. Modes: "protect" = safer passes / dribbles (one cycle more
+    # margin), defence deeper, clear in danger, shield it at the corner
+    # flag late; "attack" = risky through passes, defenders push up, forwards
+    # to open spots, press harder, shoot past an advanced keeper.
+    META = False
+    META_FORCE = None          # a fixed mode (calibration runs), or "score":
+                               # attack when behind, protect when ahead
+    META_SLICE = 50            # MDP time step, cycles
+    META_UTIL = (3.0, 1.0, 0.0)            # win, draw, loss
+    META_GOALS = 2.0           # Gamma prior mean, goals per match each side
+    META_PRIOR_W = 0.5         # ... worth this many matches
+    # (scoring-rate factor us, them) per mode, measured against FULL with
+    # the mode forced for whole matches (24 / 23 / 24 matches): normal
+    # 2.04 for, 1.92 against; protect 1.29 / 1.79; attack 1.57 / 2.04.
+    # Both modes cost goal difference, so the policy keeps "normal" except
+    # to protect a lead in the last 50-150 cycles.
+    META_EFFECT = (("normal", (1.0, 1.0)), ("protect", (0.63, 0.93)),
+                   ("attack", (0.77, 1.07)))
 
     def __init__(self):
         super().__init__()
+        self._mode = "normal"
+        self._meta = (-1, "normal")
         self._b0 = None
         self._total_cycles = None
         self._recover_mode = False
@@ -1962,6 +2086,32 @@ class HeliosAgent(StarterAgent):
             self._ph = _Phys(agent)
         return self._ph
 
+    def _meta_mode(self, agent):
+        """Playing mode for this cycle (see _meta_policy)."""
+        if self.META_FORCE and self.META_FORCE != "score":
+            return self.META_FORCE
+        if not self.META and self.META_FORCE != "score":
+            return "normal"
+        wm = agent.wm
+        try:
+            cyc = int(wm.cycle)
+            gf, ga = int(wm.our_team_score), int(wm.their_team_score)
+        except Exception:
+            return "normal"
+        if self.META_FORCE == "score":
+            # plain rule: chase when behind, protect when ahead
+            return "attack" if gf < ga else "protect" if gf > ga else "normal"
+        if self._meta[0] != cyc:
+            total = self._match_cycles(agent)
+            mode = _meta_policy(gf - ga, max(0, total - cyc), cyc, gf, ga,
+                                total, self.META_SLICE, self.META_UTIL,
+                                self.META_GOALS, self.META_PRIOR_W,
+                                self.META_EFFECT)
+            if mode != self._meta[1]:
+                _note(agent, "meta", mode=mode, gf=gf, ga=ga, cyc=cyc)
+            self._meta = (cyc, mode)
+        return self._meta[1]
+
     # ------------------------------------------------------------------
     # ON BALL
     # ------------------------------------------------------------------
@@ -1982,8 +2132,11 @@ class HeliosAgent(StarterAgent):
         w = _World(agent)
         cpu, wall = self._deadlines(agent, self._allowance_ms(agent, True),
                                     self.ON_WALL_MARGIN)
+        self._mode = mode = self._meta_mode(agent)
         hp = _Helios(ph, w, cpu, wall, self.DEEP_CHAIN, self.USE_CROSS,
-                     self.GRANULARITY, self.G2D_RISKY)
+                     self.GRANULARITY, self.G2D_RISKY or mode == "attack")
+        hp.SAFE = 1 if mode == "protect" else 0
+        hp.GAP_EVAL = self.GAP_EVAL
         hp.MAX_CHAIN = self.CHAIN_DEPTH
         hp.ORDERED_MIN = self.ORDERED_MIN
         hp.TRANSPOSITION = self.TRANSPOSITION
@@ -2008,6 +2161,8 @@ class HeliosAgent(StarterAgent):
                 _A.kick(agent, Vector2D(tx, ty), n, accept_late=1)
             return True
         if self._extra_shot(agent):
+            return True
+        if self.GAP_SHOT and self._gap_shot(agent, ph, w):
             return True
         # 1b. football heuristics that do not need the search
         if self._heur_pre(agent, ph, w):
@@ -2062,11 +2217,15 @@ class HeliosAgent(StarterAgent):
     # Football heuristics (each behind its own switch)
     # ------------------------------------------------------------------
     def _heur_pre(self, agent, ph, w):
-        if self.H_KEEPER_OUT and self._keeper_out_shot(agent, ph, w):
+        mode = self._mode
+        if ((self.H_KEEPER_OUT or mode == "attack")
+                and self._keeper_out_shot(agent, ph, w)):
             return True
-        if self.H_CLEAR_DANGER and self._clear_danger(agent, ph, w):
+        if ((self.H_CLEAR_DANGER or mode == "protect")
+                and self._clear_danger(agent, ph, w)):
             return True
-        if self.H_PROTECT_LEAD and self._protect_lead(agent, ph, w):
+        if ((self.H_PROTECT_LEAD or mode == "protect")
+                and self._protect_lead(agent, ph, w)):
             return True
         return False
 
@@ -2095,6 +2254,69 @@ class HeliosAgent(StarterAgent):
                                       - ctrl) + delay <= c:
                     return False
         return True
+
+    def _gap_shot(self, agent, ph, w):
+        """Shoot where the keeper cannot get to. Fitted on 83 recordings
+        (443 shots against the framework's own keeper): with the keeper's
+        reach margin (_keeper_margin) >= 0 a shot scored 91% (235/258), at
+        any distance; -2..0 58%, below -2 34%. HELIOS's strict check
+        assumes the keeper reaches every ball he could in theory, so it
+        rarely fires. Here: inside GAP_SHOT_DIST, the target in the goal
+        mouth with the largest margin (at least GAP_MARGIN), with no field
+        player able to reach the ball first."""
+        if math.hypot(ph.hl - w.bx, w.by) > self.GAP_SHOT_DIST:
+            return False
+        gk = next((o for o in w.opps if o.goalie), None)
+        field = [o for o in w.opps if not o.goalie]
+        near = min((math.hypot(o.x - w.bx, o.y - w.by) for o in field),
+                   default=99.0)
+        lim = ph.goal_half - 0.8
+        tx = ph.hl + 0.5
+        best = None
+        for k in range(41):
+            ty = -lim + 2.0 * lim * k / 40.0
+            ang = math.degrees(math.atan2(ty - w.by, tx - w.bx))
+            v1 = ph.max_vel(ang, w.kick_rate, w.bvx, w.bvy)
+            if v1 >= 2.2:
+                speed, steps = min(v1, ph.bmax), 1
+            elif near > 4.0:
+                speed, steps = 2.6, 2           # wind up: nobody close
+            else:
+                continue
+            m = _keeper_margin(ph, w.bx, w.by, tx, ty, speed, gk, steps - 1)
+            if m < self.GAP_MARGIN:
+                continue
+            if not self._lane_clear(ph, w, field, tx, ty, speed, steps - 1):
+                continue
+            if best is None or m > best[0]:
+                best = (m, ty, steps, speed)
+        if best is None:
+            return False
+        m, ty, steps, speed = best
+        _note(agent, "gap_shot", d=round(math.hypot(ph.hl - w.bx, w.by), 1),
+             margin=round(m, 2), v=round(speed, 2), steps=steps)
+        if steps == 1:
+            _A.kick_one_step(agent, Vector2D(tx, ty))
+        else:
+            n = Tools.steps_required(speed, math.hypot(tx - w.bx, ty - w.by),
+                                     ph.decay, ph.bmax) or 1
+            _A.kick(agent, Vector2D(tx, ty), n, accept_late=1)
+        return True
+
+    def _lane_clear(self, ph, w, field, tx, ty, speed, delay):
+        """No field opponent reaches a ball kicked at `speed` towards
+        (tx, ty) before it crosses the goal line."""
+        d = math.hypot(tx - w.bx, ty - w.by)
+        ux, uy = (tx - w.bx) / d, (ty - w.by) / d
+        for c in range(1, 30):
+            bx, by = ph.ball_at(w.bx, w.by, ux * speed, uy * speed, c)
+            for o in field:
+                if ph.cycles_to_reach(math.hypot(bx - o.x, by - o.y)
+                                      - ph.kickable) <= c + delay:
+                    return False
+            if bx >= ph.hl:
+                return True
+        return False
 
     def _keeper_out_shot(self, agent, ph, w):
         """Their goalie is off his line: shoot into the far side of the
@@ -2277,6 +2499,7 @@ class HeliosAgent(StarterAgent):
         self_min = int(it.self_reach_steps)
         mate_min = int(it.first_teammate_reach_steps)
         opp_min = int(it.first_opponent_reach_steps)
+        self._mode = mode = self._meta_mode(agent)
 
         # Bhv_BasicTackle( 0.8, 80 )
         if self._basic_tackle(agent, ph, w, self_min, mate_min, opp_min):
@@ -2291,6 +2514,17 @@ class HeliosAgent(StarterAgent):
             if (abs(w.by) > 22.0 and -36.5 < w.bx < 0.0
                     and role in (4, 5)):
                 pressing = 23
+        if mode == "attack":
+            pressing = max(pressing, 6)
+        # press: the nearest of us goes at a carrier in our half instead of
+        # shadowing him (opponents kept the ball 84% of a match, losing it
+        # in open play once or twice, against the block + marking alone)
+        if (self.PRESS and wm.kickable_opponent_existance
+                and w.bx < self.PRESS_X and self_min <= mate_min):
+            _note(agent, "press_carrier", steps=self_min)
+            _A.intercept(agent)
+            _A.go_to_point(agent, Vector2D(w.bx, w.by), 100.0, 0.3)
+            return True
         # intercept
         if not wm.kickable_teammate_existance and (
                 self_min <= 3
@@ -2303,10 +2537,14 @@ class HeliosAgent(StarterAgent):
         hx, hy = _xy(_home(agent))
         team = [m for m in w.mates if not m.goalie] + [me]
         our_ball = wm.kickable_teammate_existance or mate_min < opp_min
-        if self.G2D_DEEP_FORM and not our_ball and role <= 8:
+        if ((self.G2D_DEEP_FORM or mode == "protect") and not our_ball
+                and role <= 8):
             shift = 6.0 if role <= 5 else 4.0
             hx = max(-ph.hl + 4.0, hx - shift)
-        if self.G2D_OPEN_SPOT and our_ball and role >= 9:
+        if mode == "attack" and our_ball and role <= 8:
+            hx = max(hx, min(w.offside - 1.0, hx + (6.0 if role <= 5 else 4.0)))
+        if ((self.G2D_OPEN_SPOT or mode == "attack") and our_ball
+                and role >= 9):
             hx, hy = self._open_spot(agent, ph, w, hx, hy)
 
         if opp_min < min(self_min, mate_min):
@@ -2391,7 +2629,7 @@ class HeliosAgent(StarterAgent):
                 and tp < fp):
             tp, use_foul = fp, True
         thr = 0.8
-        if self.TACKLE_NEAR_GOAL:
+        if self.TACKLE_NEAR_GOAL or self.PRESS:
             # LightAgent: accept a riskier tackle the nearer our goal it is
             dgoal = math.hypot(w.bx + ph.hl, w.by)
             if dgoal < 18.0:
@@ -7336,22 +7574,38 @@ class LightAgent(StarterAgent):
 #                 then really does (the online form of EM for a mixture).
 #                 Our defence uses it: block his predicted dribble, mark /
 #                 cut the lane to his predicted receivers.
+#
+#   "none"        both mixtures carry a component for "he is none of the
+#                 three": an uninformative likelihood (carrier: kick or
+#                 keep 50/50, any direction; movement: anywhere he can run
+#                 to in OPP_H cycles). It only gains weight when every
+#                 engine explains what he did worse than chance would, so an
+#                 opponent unlike the models is detected (EM / Bayesian
+#                 updating, as above). Its weight lowers the trust in the
+#                 model: predictions are shrunk towards plain HELIOS
+#                 (opponents where they stand, no carrier hint).
 # ==========================================================================
 
 OPP_PARTS = ("inertia", "helios", "col", "light")
-OPP_W0 = (0.5278, 0.1471, 0.3251, 0.0)     # prior weights (fit to many teams)
-OPP_Q0 = ((0.16762, 0.83942, 1.05713, 0.33554), (0.83942, 19.7477, 12.25855, 7.78355), (1.05713, 12.25855, 21.37217, 6.79837), (0.33554, 7.78355, 6.79837, 18.55512))     # prior sufficient statistics, per sample
-OPP_B0 = (1.1255, 7.90208, 9.87769, 3.50531)
+OPP_W0 = (0.5314, 0.1604, 0.3082, 0.0)     # prior weights (fit to many teams)
+OPP_Q0 = ((0.16791, 0.81267, 1.01435, 0.33968), (0.81267, 19.3998, 11.47361, 7.85224), (1.01435, 11.47361, 21.14621, 6.49803), (0.33968, 7.85224, 6.49803, 18.42854))     # prior sufficient statistics, per sample
+OPP_B0 = (1.1077, 7.65533, 9.47261, 3.54336)
 OPP_KAPPA = 150.0       # prior strength, in samples
 OPP_H = 6               # horizon the weights are learned at (cycles)
 OPP_REFIT = 8           # re-solve the weights after this many new samples
+OPP_SIGMA = 1.5862   # per-axis noise of the mixture's prediction (m, EM)
+OPP_NONE0 = 0.0205    # prior P(none) for movement (EM on recordings)
+OPP_NONE_KAPPA = 60.0   # Beta prior strength (samples)
 
-CAR_PARTS = ("helios", "col", "light")
-CAR_W0 = (0.5598, 0.3506, 0.0896)      # prior mixture weights (EM on recordings)
+CAR_PARTS = ("helios", "col", "light", "none")
+CAR_W0 = (0.4067, 0.4613, 0.082, 0.05)      # prior mixture weights (EM on recordings)
 CAR_KAPPA = 12.0        # Dirichlet prior strength (observed decisions)
 CAR_EVERY = 1           # re-predict the carrier every this many cycles
 CAR_SIGMA = 25.0        # direction noise of a prediction (degrees)
 CAR_CLASS = 0.75        # P(right class: kick vs keep the ball)
+# mean over the circle of the direction kernel below, so the kernel divided
+# by it is a density relative to "any direction" (= 1)
+CAR_DIR_Z = CAR_SIGMA * math.sqrt(2.0 * math.pi) / 360.0 + 0.05
 
 
 def _simplex_climb(Q, b, w0, step=0.25, tol=1e-4):
@@ -7427,16 +7681,20 @@ def _car_outcome(c0, holder, bx0, by0, now_cycle, bx, by, kick_us, kick_them):
 
 
 def _car_lik(pred, obs, bx0, by0):
-    """Likelihood of what he did under one engine's prediction."""
-    kind, tx, ty = pred
+    """Likelihood of what he did under one engine's prediction (class
+    probability x direction density relative to 'any direction'), or under
+    "none" (pred None: either class, any direction)."""
     okind, odir = obs
+    if pred is None:
+        return 0.5 * (0.8 if odir is None and okind == "keep" else 1.0)
+    kind, tx, ty = pred
     pk = "kick" if kind == "kick" else "keep"
     lik = CAR_CLASS if pk == okind else 1.0 - CAR_CLASS
     if odir is not None and kind != "hold" and pk == okind:
         pdir = math.degrees(math.atan2(ty - by0, tx - bx0))
         e = abs(_norm(pdir - odir)) / CAR_SIGMA
-        lik *= math.exp(-0.5 * e * e) + 0.05
-    elif odir is None and okind == "keep":
+        lik *= (math.exp(-0.5 * e * e) + 0.05) / CAR_DIR_Z
+    elif odir is None and okind == "keep" and pk == okind:
         lik *= 1.0 if kind == "hold" else 0.6
     return lik
 
@@ -7453,6 +7711,12 @@ class _OppModel:
         self.n = 0
         self.alpha = [CAR_KAPPA * x for x in CAR_W0]
         self.n_car = 0
+        # Beta posterior on P(movement is none of the models)
+        self.a_none = OPP_NONE_KAPPA * OPP_NONE0
+        self.a_fam = OPP_NONE_KAPPA * (1.0 - OPP_NONE0)
+        # "none": anywhere he can run to in OPP_H cycles (uniform on a disk)
+        vmax = float(getattr(sp, "player_speed_max", 1.05) or 1.05)
+        self.none_r = vmax * OPP_H + 1.0
         self.eng = {}
         self.form = LightAgent()          # LightAgent.formation: a least-
         self.form.model = Model(sp)       # squares fit of the shared formation
@@ -7582,7 +7846,17 @@ class _OppModel:
             out.append(self._move(ph, o, T, t) if T is not None else out[0])
         return out
 
+    def p_none(self):
+        """P(his movement is none of the models)."""
+        return self.a_none / (self.a_none + self.a_fam)
+
+    def trust(self):
+        return 1.0 - self.p_none()
+
     def predict(self, ph, opps, tg, t):
+        """Mixture prediction, shrunk towards plain HELIOS (he stays where
+        he is) by P(none)."""
+        tr = self.trust()
         res = []
         for o in opps:
             row = tg.get(o.unum)
@@ -7593,8 +7867,28 @@ class _OppModel:
                 for wk, (px, py) in zip(self.w, self.parts(ph, o, row, t)):
                     x += wk * px
                     y += wk * py
+            x = tr * x + (1.0 - tr) * o.x
+            y = tr * y + (1.0 - tr) * o.y
             res.append(_P(o.unum, x, y, 0.0, 0.0, o.body, o.goalie, o.tackling))
         return res
+
+    def none_update(self, d, ax, ay):
+        """EM step for the outlier component: the responsibility of "none"
+        for one observed movement (a Gaussian around the mixture's
+        prediction vs uniform over his reach) is added to its Beta
+        posterior."""
+        px = sum(wk * dx for wk, (dx, _) in zip(self.w, d))
+        py = sum(wk * dy for wk, (_, dy) in zip(self.w, d))
+        r2 = (ax - px) ** 2 + (ay - py) ** 2
+        s2 = OPP_SIGMA * OPP_SIGMA
+        g = math.exp(-0.5 * r2 / s2) / (2.0 * math.pi * s2)
+        u = 1.0 / (math.pi * self.none_r * self.none_r)
+        pn = self.p_none()
+        z = pn * u + (1.0 - pn) * g
+        if z > 0.0:
+            gam = pn * u / z
+            self.a_none += gam
+            self.a_fam += 1.0 - gam
 
     def add_sample(self, ph, cycle, opps, tg):
         rows = []
@@ -7628,6 +7922,7 @@ class _OppModel:
                 if math.hypot(ax, ay) > 15.0:          # restart / set play
                     continue
                 d = [(px - x0, py - y0) for px, py in pr]
+                self.none_update(d, ax, ay)
                 for i in range(k):
                     for j in range(k):
                         self.Q[i][j] += d[i][0] * d[j][0] + d[i][1] * d[j][1]
@@ -7654,6 +7949,9 @@ class _OppModel:
         wm, home = self._mirror(ph, v, cx, j, slots, True)
         preds = []
         for name in CAR_PARTS:
+            if name == "none":
+                preds.append(None)          # no prediction: any action
+                continue
             m = _Mirror(wm, self.sp, home, self.think_ms)
             try:
                 self._engine(name, j.unum).on_ball(m)
@@ -7702,7 +8000,10 @@ class _OppModel:
         w = self.car_weights()
         p_keep, sx, sy = 0.0, 0.0, 0.0
         recv = {}
-        for wk, (kind, tx, ty) in zip(w, preds):
+        for wk, pred in zip(w, preds):
+            if pred is None:            # "none": its mass backs no action
+                continue
+            kind, tx, ty = pred
             if kind in ("keep", "hold"):
                 p_keep += wk
                 if kind == "keep":
@@ -7756,6 +8057,7 @@ class Agent1(HeliosAgent):
     OPP_MODEL = True          # plan against the opponent model
     OPP_LEARN = True          # update the model during the match
     CARRIER_MODEL = True      # defend against the predicted carrier action
+    META = True               # protect a lead / chase a deficit (_meta_policy)
     CHAIN_DEPTH = 6           # deeper tree than HELIOS's 4
     SAMPLE_EVERY = 2          # learning samples while we have the ball
     # more of the budget (agent A: 0.68 / 12 / 420 / 0.8 / 80 / 20000)
@@ -7855,8 +8157,10 @@ class Agent1(HeliosAgent):
 
         allow = self._allowance_ms(agent, True)
         hp.root_ctx = root_ctx
+        # re-deciding opponents is only worth it while the model is trusted
         hp.ROOT_CTX_K = int(max(0.0, min(self.ROOT_REPLAN_MAX,
-                                         0.5 * allow / self.ROOT_REPLAN_MS)))
+                                         0.5 * allow / self.ROOT_REPLAN_MS)
+                                * om.trust()))
         if self.OPP_LEARN:
             om.add_sample(ph, w.cycle, w.opps, tg)
             self._last_sample = w.cycle
@@ -7910,6 +8214,7 @@ class Agent1(HeliosAgent):
                                or math.hypot(w.me.x - w.bx, w.me.y - w.by) <= ph.kickable)
             if w.cycle % 150 == 0:
                 _note(agent, "oppmodel", w=[round(x, 2) for x in om.w], n=om.n,
+                      none=round(om.p_none(), 3),
                       car=[round(x, 2) for x in om.car_weights()], n_car=om.n_car)
             if (not self.OPP_MODEL or not may_sample
                     or w.cycle - self._last_sample < self.SAMPLE_EVERY):
